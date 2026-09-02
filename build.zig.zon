@@ -1,0 +1,15 @@
+.{
+    .name = .zig_rsa,
+    .description = "A RSA library for zig.",
+    .version = "0.0.1",
+    .fingerprint = 0x2b217de51c7e1426,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+        "src",
+    },
+}
