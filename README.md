@@ -69,7 +69,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("rsa signPkcs1v15: {x} \n", .{signature});
 
     const veri = rsa.verifyPkcs1v15(kp.public_key, Sha256, msg, signature);
-    var status = true;
+    var status: bool = true;
     if (veri) |_| {
         status = true;
     } else |_| {
