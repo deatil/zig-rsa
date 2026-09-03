@@ -772,3 +772,34 @@ test "Key check" {
         try std.testing.expectEqual(false, kp2.public_key.equal(pub_key));
     }
 }
+
+fn test_publicKey_size() !void {
+    const alloc = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
+    const random = prng.random();
+
+    {
+        const kp = try rsa.generate_key(alloc, random, 512);
+        try std.testing.expectEqual(64, kp.public_key.size());
+    }
+
+    {
+        const kp = try rsa.generate_key(alloc, random, 1024);
+        try std.testing.expectEqual(128, kp.public_key.size());
+    }
+
+    {
+        const kp = try rsa.generate_key(alloc, random, 2048);
+        try std.testing.expectEqual(256, kp.public_key.size());
+    }
+
+    {
+        const kp = try rsa.generate_key(alloc, random, 4096);
+        try std.testing.expectEqual(512, kp.public_key.size());
+    }
+}
+
+test "PublicKey size" {
+    // try test_publicKey_size();
+}

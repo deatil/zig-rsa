@@ -327,7 +327,7 @@ pub const SecretKey = struct {
 
     pub fn fromDer(bytes: []const u8) !Self {
         var parser = der.Parser{ .bytes = bytes };
-        const seq = try parser.expectSequence();
+        _ = try parser.expectSequence();
         const version = try parser.expectInt(u8);
 
         const mod = try parser.expectPrimitive(.integer);
@@ -336,8 +336,6 @@ pub const SecretKey = struct {
         const sec_exp = try parser.expectPrimitive(.integer);
         const prime1 = try parser.expectPrimitive(.integer);
         const prime2 = try parser.expectPrimitive(.integer);
-
-        _ = seq;
 
         switch (version) {
             0 => {},
