@@ -68,6 +68,8 @@ pub fn main(init: std.process.Init) !void {
     // rsa signPkcs1v15: 2ad0059bbd6d7e90c4c6e570611548e9125f6e36e94a0b331015aa960976b237f07ca880a44e52efb9d8aba96e63838f73d0aef9c18d9bf0728ece0bc94833bbfbb9cd57a9cca2133ce6eb872cb7f3747ffa89e94634ab589085f6a113c8e31a149ff6177d91d98f5e1af91ba3a4e4e9339d5bf50474f0c18483d0ee8ac1079a1dac9408e00a64907a9a43bce4273a5573c9f0d4814f0271eec465791f500b33ac1059899ee0ee643a3b9b6abe0980675dd8a3be26d61bef3f11f5ab5e9129276f6a8ddb9be958b3ea6413e38d79a5e9c025c0b488b8e4234b3d0807da36eb82d2c19f9fd95a71a4aff2f5219ba0e3b0df994c3129204d0e9c48d1e47bfb2edd
     std.debug.print("rsa signPkcs1v15: {x} \n", .{signature});
 
+    // ==============
+
     const veri = rsa.verifyPkcs1v15(kp.public_key, Sha256, msg, signature);
     var status: bool = true;
     if (veri) |_| {
@@ -86,7 +88,7 @@ pub fn main(init: std.process.Init) !void {
 
 Generate key: 
 ~~~v
-generate(alloc: Allocator, random: std.Random, bits: usize) !KeyPair
+generate_key(alloc: Allocator, random: Random, bits: usize) !KeyPair
 ~~~
 
 PKCS1v15 sign: 
@@ -146,23 +148,30 @@ decryptOaep(
 
 PSS sign: 
 ~~~v
-signPss(
+pub const PSSOptions = struct {
+    salt_leng: isize = 0,
+    salt: ?[]const u8 = null,
+};
+~~~
+
+~~~v
+pub fn signPss(
     alloc: Allocator,
-    random: std.Random,
+    random: Random,
     secret_key: SecretKey,
     comptime Hash: type,
     msg: []const u8,
-    salt: ?[]const u8,
+    opts: PSSOptions,
 ) ![]u8
 ~~~
 
 ~~~v
-verifyPss(
+pub fn verifyPss(
     public_key: PublicKey,
     comptime Hash: type,
     msg: []const u8,
     sig: []u8,
-    salt_len: ?usize,
+    opts: PSSOptions,
 ) !void
 ~~~
 

@@ -17,8 +17,6 @@ const FeUint = ff.Uint(max_modulus_bits);
 const Modulus = ff.Modulus(max_modulus_bits);
 const Fe = Modulus.Fe;
 
-pub const pss_salt_length_auto = 0;
-
 const oid_rsa_publickey = "1.2.840.113549.1.1.1";
 
 const PrikeyData = struct {
@@ -35,9 +33,16 @@ const PubkeyData = struct {
     e: i32,
 };
 
+// OAEPOptions corresponds to options for OAEP decryption.
 pub const OAEPOptions = struct {
+    // hash is the hash function that will be used when generating the mask.
     hash: type,
+
+    // mgf_hash is the hash function used for MGF1.
     mgf_hash: ?type = null,
+
+    // label is an arbitrary byte string that must be equal to the value
+    // used when encrypting.
     label: []const u8 = "",
 };
 
@@ -61,7 +66,7 @@ pub const PublicKey = struct {
         return false;
     }
 
-    pub fn fromBytes(mod: []const u8, exp: []const u8) !PublicKey {
+    pub fn fromBytes(mod: []const u8, exp: []const u8) !Self {
         const n = try Modulus.fromBytes(mod, .big);
         if (n.bits() <= 512) {
             return error.InsecureBitCount;
@@ -84,7 +89,7 @@ pub const PublicKey = struct {
         };
     }
 
-    pub fn fromDer(bytes: []const u8) !PublicKey {
+    pub fn fromDer(bytes: []const u8) !Self {
         var parser = der.Parser{ .bytes = bytes };
 
         const seq = try parser.expectSequence();
@@ -99,9 +104,9 @@ pub const PublicKey = struct {
         return Self.fromBytes(n, e);
     }
 
-    pub fn fromPKCS8Der(bytes: []const u8) !PublicKey {
+    pub fn fromPKCS8Der(bytes: []const u8) !Self {
         var parser = der.Parser{ .bytes = bytes };
-        const seq = try parser.expectSequence();
+        _ = try parser.expectSequence();
 
         const oid_seq = try parser.expectSequence();
         const oid = try parser.expectOid();
@@ -111,12 +116,10 @@ pub const PublicKey = struct {
         parser.seek(oid_seq.slice.end);
         const pubkey = try parser.expectBitstring();
 
-        _ = seq;
-
         return Self.fromDer(pubkey.bytes);
     }
 
-    pub fn fromDerAuto(bytes: []const u8) !PublicKey {
+    pub fn fromDerAuto(bytes: []const u8) !Self {
         const pk = Self.fromPKCS8Der(bytes) catch {
             return Self.fromDer(bytes);
         };
@@ -138,14 +141,12 @@ pub const PublicKey = struct {
     }
 
     /// Encrypt a short message using RSAES-PKCS1-v1_5.
-    pub fn encryptPkcs1v15(self: Self, random: std.Random, msg: []const u8, out: []u8) ![]const u8 {
+    pub fn encryptPkcs1v15(self: Self, alloc: Allocator, random: Random, msg: []const u8) ![]const u8 {
         // align variable names with spec
         const k = utils.byteLen(self.n.bits());
-        if (out.len < k) return error.BufferTooSmall;
-        if (msg.len > k - 11) return error.MessageTooLong;
 
         // EM = 0x00 || 0x02 || PS || 0x00 || M.
-        var em = out[0..k];
+        var em = try alloc.alloc(u8, k);
         em[0] = 0;
         em[1] = 2;
 
@@ -169,47 +170,48 @@ pub const PublicKey = struct {
     /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
     pub fn encryptOaep(
         self: Self,
-        random: std.Random,
+        alloc: Allocator,
+        random: Random,
         comptime Hash: type,
         msg: []const u8,
         label: []const u8,
-        out: []u8,
     ) ![]const u8 {
-        return self.encryptOaepInternal(random, Hash, Hash, msg, label, out);
+        return self.encryptOaepInternal(alloc, random, Hash, Hash, msg, label);
     }
 
     pub fn encryptOaepWithOptions(
         self: Self,
-        random: std.Random,
+        alloc: Allocator,
+        random: Random,
         msg: []const u8,
-        out: []u8,
         opts: OAEPOptions,
     ) ![]const u8 {
         if (opts.mgf_hash) |mgf_hash| {
-            return self.encryptOaepInternal(random, opts.hash, mgf_hash, msg, opts.label, out);
+            return self.encryptOaepInternal(alloc, random, opts.hash, mgf_hash, msg, opts.label);
         }
 
-        return self.encryptOaepInternal(random, opts.hash, opts.hash, msg, opts.label, out);
+        return self.encryptOaepInternal(alloc, random, opts.hash, opts.hash, msg, opts.label);
     }
 
     /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
     fn encryptOaepInternal(
         self: Self,
-        random: std.Random,
+        alloc: Allocator,
+        random: Random,
         comptime Hash: type,
         comptime MgfHash: type,
         msg: []const u8,
         label: []const u8,
-        out: []u8,
     ) ![]const u8 {
         // align variable names with spec
         const k = utils.byteLen(self.n.bits());
-        if (out.len < k) return error.BufferTooSmall;
 
-        if (msg.len > k - 2 * Hash.digest_length - 2) return error.MessageTooLong;
+        if (msg.len > k - 2 * Hash.digest_length - 2) {
+            return error.MessageTooLong;
+        }
 
         // EM = 0x00 || maskedSeed || maskedDB.
-        var em = out[0..k];
+        var em = try alloc.alloc(u8, k);
         em[0] = 0;
         const seed = em[1..][0..Hash.digest_length];
 
@@ -298,7 +300,7 @@ pub const SecretKey = struct {
         dbytes: []const u8,
         pbytes: []const u8,
         qbytes: []const u8,
-    ) !SecretKey {
+    ) !Self {
         const pubkey = try PublicKey.fromBytes(nbytes, ebytes);
 
         const d = try Fe.fromBytes(pubkey.n, dbytes, .big);
@@ -323,7 +325,7 @@ pub const SecretKey = struct {
         };
     }
 
-    pub fn fromDer(bytes: []const u8) !SecretKey {
+    pub fn fromDer(bytes: []const u8) !Self {
         var parser = der.Parser{ .bytes = bytes };
         const seq = try parser.expectSequence();
         const version = try parser.expectInt(u8);
@@ -353,7 +355,7 @@ pub const SecretKey = struct {
         return Self.fromBytes(n, e, d, p, q);
     }
 
-    pub fn fromPKCS8Der(bytes: []const u8) !SecretKey {
+    pub fn fromPKCS8Der(bytes: []const u8) !Self {
         var parser = der.Parser{ .bytes = bytes };
         _ = try parser.expectSequence();
 
@@ -374,7 +376,7 @@ pub const SecretKey = struct {
         return Self.fromDer(prikey_bytes);
     }
 
-    pub fn fromDerAuto(bytes: []const u8) !SecretKey {
+    pub fn fromDerAuto(bytes: []const u8) !Self {
         const sk = Self.fromPKCS8Der(bytes) catch {
             return Self.fromDer(bytes);
         };
@@ -382,11 +384,10 @@ pub const SecretKey = struct {
         return sk;
     }
 
-    pub fn decryptPkcs1v15(self: Self, ciphertext: []const u8, out: []u8) ![]const u8 {
+    pub fn decryptPkcs1v15(self: Self, alloc: Allocator, ciphertext: []const u8) ![]const u8 {
         const k = utils.byteLen(self.public_key.n.bits());
-        if (out.len < k) return error.BufferTooSmall;
 
-        const em = out[0..k];
+        const em = try alloc.alloc(u8, k);
 
         const m = try Fe.fromBytes(self.public_key.n, ciphertext, .big);
         const e = try self.public_key.n.pow(m, self.d);
@@ -401,47 +402,49 @@ pub const SecretKey = struct {
             return error.Inconsistent;
         }
 
-        return em[msg_start + 1 ..];
+        const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
+        defer alloc.free(em);
+
+        return out;
     }
 
     pub fn decryptOaep(
         self: Self,
+        alloc: Allocator,
         comptime Hash: type,
         ciphertext: []const u8,
         label: []const u8,
-        out: []u8,
     ) ![]u8 {
-        return self.decryptOaepInternal(Hash, Hash, ciphertext, label, out);
+        return self.decryptOaepInternal(alloc, Hash, Hash, ciphertext, label);
     }
 
     pub fn decryptOaepWithOptions(
         self: Self,
+        alloc: Allocator,
         ciphertext: []const u8,
-        out: []u8,
         opts: OAEPOptions,
     ) ![]u8 {
         if (opts.mgf_hash) |mgf_hash| {
-            return self.decryptOaepInternal(opts.hash, mgf_hash, ciphertext, opts.label, out);
+            return self.decryptOaepInternal(alloc, opts.hash, mgf_hash, ciphertext, opts.label);
         }
 
-        return self.decryptOaepInternal(opts.hash, opts.hash, ciphertext, opts.label, out);
+        return self.decryptOaepInternal(alloc, opts.hash, opts.hash, ciphertext, opts.label);
     }
 
     fn decryptOaepInternal(
         self: Self,
+        alloc: Allocator,
         comptime Hash: type,
         comptime MgfHash: type,
         ciphertext: []const u8,
         label: []const u8,
-        out: []u8,
     ) ![]u8 {
         // align variable names with spec
         const k = utils.byteLen(self.public_key.n.bits());
-        if (out.len < k) return error.BufferTooSmall;
 
         const mod = try Fe.fromBytes(self.public_key.n, ciphertext, .big);
         const exp = self.public_key.n.pow(mod, self.d) catch unreachable;
-        const em = out[0..k];
+        const em = try alloc.alloc(u8, k);
         try exp.toBytes(em, .big);
 
         const y = em[0];
@@ -467,7 +470,10 @@ pub const SecretKey = struct {
             return error.Inconsistent;
         }
 
-        return em[msg_start + 1 ..];
+        const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
+        defer alloc.free(em);
+
+        return out;
     }
 
     /// decrypt short plaintext with secret key.
@@ -607,7 +613,7 @@ pub const KeyPair = struct {
 
     const Self = @This();
 
-    pub fn generate(alloc: Allocator, random: std.Random, bits: usize) !Self {
+    pub fn generate(alloc: Allocator, random: Random, bits: usize) !Self {
         if (bits < utils.min_modulus_bits or bits > utils.max_modulus_bits or bits % 2 != 0) {
             return error.InvalidBits;
         }
@@ -728,39 +734,39 @@ pub const KeyPair = struct {
     }
 
     /// Return the public key corresponding to the secret key.
-    pub fn fromSecretKey(secret_key: SecretKey) !KeyPair {
+    pub fn fromSecretKey(secret_key: SecretKey) !Self {
         return .{
             .secret_key = secret_key,
             .public_key = secret_key.public_key,
         };
     }
 
-    pub fn signPkcs1v15(self: Self, comptime Hash: type, msg: []const u8, out: []u8) !PKCS1v15(Hash).Signature {
-        var st = try self.signerPkcs1v15(Hash);
+    pub fn signPkcs1v15(self: Self, alloc: Allocator, comptime Hash: type, msg: []const u8) !PKCS1v15(Hash).Signature {
+        var st = try self.signerPkcs1v15(alloc, Hash);
         st.update(msg);
-        return st.finalize(out);
+        return st.finalize();
     }
 
-    pub fn signerPkcs1v15(self: Self, comptime Hash: type) !PKCS1v15(Hash).Signer {
-        return PKCS1v15(Hash).Signer.init(self.secret_key);
+    pub fn signerPkcs1v15(self: Self, alloc: Allocator, comptime Hash: type) !PKCS1v15(Hash).Signer {
+        return PKCS1v15(Hash).Signer.init(alloc, self.secret_key);
     }
 
     pub fn signPss(
         self: Self,
-        random: std.Random,
+        alloc: Allocator,
+        random: Random,
         comptime Hash: type,
         msg: []const u8,
-        salt: ?[]const u8,
-        out: []u8,
+        opts: PSSOptions,
     ) !Pss(Hash).Signature {
-        var st = try self.signerPss(random, Hash, salt);
+        var st = try self.signerPss(alloc, random, Hash, opts);
         st.update(msg);
-        return st.finalize(out);
+        return st.finalize();
     }
 
     /// Salt must outlive returned `PSS.Signer`.
-    pub fn signerPss(self: Self, random: std.Random, comptime Hash: type, salt: ?[]const u8) !Pss(Hash).Signer {
-        return Pss(Hash).Signer.init(random, self.secret_key, salt);
+    pub fn signerPss(self: Self, alloc: Allocator, random: Random, comptime Hash: type, opts: PSSOptions) !Pss(Hash).Signer {
+        return Pss(Hash).Signer.init(alloc, random, self.secret_key, opts);
     }
 };
 
@@ -787,7 +793,11 @@ pub fn PKCS1v15(comptime Hash: type) type {
 
             const Self = @This();
 
-            pub fn verifier(self: Self, public_key: PublicKey) !Verifier {
+            pub fn deinit(self: *Self, alloc: Allocator) void {
+                alloc.free(self.bytes);
+            }
+
+            pub fn verifier(self: Self, public_key: PublicKey) !PkcsT.Verifier {
                 return Verifier.init(self, public_key);
             }
 
@@ -804,20 +814,22 @@ pub fn PKCS1v15(comptime Hash: type) type {
 
             /// Create a signature from a bytes.
             pub fn fromBytes(bytes: []u8) Self {
-                return Signature{
+                return .{
                     .bytes = bytes,
                 };
             }
         };
 
         pub const Signer = struct {
+            alloc: Allocator,
             h: Hash,
             secret_key: SecretKey,
 
             const Self = @This();
 
-            pub fn init(secret_key: SecretKey) Signer {
+            pub fn init(alloc: Allocator, secret_key: SecretKey) Self {
                 return .{
+                    .alloc = alloc,
                     .h = Hash.init(.{}),
                     .secret_key = secret_key,
                 };
@@ -827,17 +839,22 @@ pub fn PKCS1v15(comptime Hash: type) type {
                 self.h.update(data);
             }
 
-            pub fn finalize(self: *Self, out: []u8) !PkcsT.Signature {
+            pub fn finalize(self: *Self) !PkcsT.Signature {
                 const k = utils.byteLen(self.secret_key.public_key.n.bits());
 
                 var hash: [Hash.digest_length]u8 = undefined;
                 self.h.final(&hash);
 
-                const em = try PkcsT.emsaEncode(hash, out[0..k]);
+                const buf = try self.alloc.alloc(u8, k);
+                const em = try PkcsT.emsaEncode(hash, buf);
 
                 try self.secret_key.decrypt(em, em);
 
-                return Signature.fromBytes(em);
+                const out = try self.alloc.dupe(u8, em);
+                defer self.alloc.free(buf);
+
+                const sig = PkcsT.Signature.fromBytes(out);
+                return sig;
             }
         };
 
@@ -848,7 +865,7 @@ pub fn PKCS1v15(comptime Hash: type) type {
 
             const Self = @This();
 
-            fn init(sig: PkcsT.Signature, public_key: PublicKey) Verifier {
+            fn init(sig: PkcsT.Signature, public_key: PublicKey) Self {
                 return Verifier{
                     .h = Hash.init(.{}),
                     .sig = sig.bytes,
@@ -961,11 +978,26 @@ pub fn PKCS1v15(comptime Hash: type) type {
     };
 }
 
+// pss_salt_length_auto causes the salt in a PSS signature to be as large
+// as possible when signing, and to be auto-detected when verifying.
+pub const pss_salt_length_auto = 0;
+// pss_salt_length_equals_hash causes the salt length to equal the length
+// of the hash used in the signature.
+pub const pss_salt_length_equals_hash = -1;
+
+// PSSOptions contains options for creating and verifying PSS signatures.
+pub const PSSOptions = struct {
+    // SaltLength controls the length of the salt used in the PSS
+    // signature. It can either be a number of bytes, or one of the special
+    // pss_salt_length constants.
+    salt_leng: isize = 0,
+
+    // if salt set, and will use it
+    salt: ?[]const u8 = null,
+};
+
 /// Probabilistic Signature Scheme (RSASSA-PSS)
 pub fn Pss(comptime Hash: type) type {
-    // RFC 4055 S3.1
-    const default_salt_len = Hash.digest_length;
-
     return struct {
         const PssT = @This();
 
@@ -974,12 +1006,16 @@ pub fn Pss(comptime Hash: type) type {
 
             const Self = @This();
 
-            pub fn verifier(self: Self, public_key: PublicKey) !Verifier {
+            pub fn deinit(self: *Self, alloc: Allocator) void {
+                alloc.free(self.bytes);
+            }
+
+            pub fn verifier(self: Self, public_key: PublicKey) !PssT.Verifier {
                 return Verifier.init(self, public_key);
             }
 
-            pub fn verify(self: Self, msg: []const u8, public_key: PublicKey, salt_len: ?usize) !void {
-                var st = Verifier.init(self, public_key, salt_len orelse default_salt_len);
+            pub fn verify(self: Self, msg: []const u8, public_key: PublicKey, opts: PSSOptions) !void {
+                var st = Verifier.init(self, public_key, opts);
                 st.update(msg);
                 return st.verify();
             }
@@ -991,26 +1027,28 @@ pub fn Pss(comptime Hash: type) type {
 
             /// Create a signature from a bytes.
             pub fn fromBytes(bytes: []u8) Self {
-                return Signature{
+                return .{
                     .bytes = bytes,
                 };
             }
         };
 
         pub const Signer = struct {
-            random: std.Random,
+            alloc: Allocator,
+            random: Random,
             h: Hash,
             secret_key: SecretKey,
-            salt: ?[]const u8,
+            opts: PSSOptions,
 
             const Self = @This();
 
-            pub fn init(random: std.Random, secret_key: SecretKey, salt: ?[]const u8) Signer {
+            pub fn init(alloc: Allocator, random: Random, secret_key: SecretKey, opts: PSSOptions) Self {
                 return .{
+                    .alloc = alloc,
                     .random = random,
                     .h = Hash.init(.{}),
                     .secret_key = secret_key,
-                    .salt = salt,
+                    .opts = opts,
                 };
             }
 
@@ -1018,23 +1056,51 @@ pub fn Pss(comptime Hash: type) type {
                 self.h.update(data);
             }
 
-            pub fn finalize(self: *Self, out: []u8) !PssT.Signature {
+            pub fn finalize(self: *Self) !PssT.Signature {
                 var hashed: [Hash.digest_length]u8 = undefined;
                 self.h.final(&hashed);
 
-                const salt = if (self.salt) |s| s else brk: {
-                    var res: [default_salt_len]u8 = undefined;
+                // RFC 4055 S3.1
+                const salt = if (self.opts.salt) |s| brk1: {
+                    const res = try self.alloc.dupe(u8, s);
+                    break :brk1 res;
+                } else brk: {
+                    var salt_len: usize = 0;
+                    switch (self.opts.salt_leng) {
+                        pss_salt_length_auto => {
+                            salt_len = (self.secret_key.public_key.n.bits() - 1 + 7) / 8 - 2 - Hash.digest_length;
+                        },
+                        pss_salt_length_equals_hash => {
+                            salt_len = Hash.digest_length;
+                        },
+                        else => {
+                            if (self.opts.salt_leng > 0) {
+                                salt_len = @as(usize, @intCast(self.opts.salt_leng));
+                            }
+                        },
+                    }
 
-                    self.random.bytes(&res);
-                    break :brk &res;
+                    const res = try self.alloc.alloc(u8, salt_len);
+
+                    self.random.bytes(res);
+                    break :brk res;
                 };
 
+                const buf = try self.alloc.alloc(u8, max_modulus_len);
+
                 const em_bits = self.secret_key.public_key.n.bits() - 1;
-                const em = try PssT.emsaPSSEncode(hashed, salt, em_bits, out);
+                const em = try PssT.emsaPSSEncode(hashed, salt, em_bits, buf);
+
+                defer self.alloc.free(salt);
 
                 try self.secret_key.decrypt(em, em);
 
-                return .{ .bytes = em };
+                const out = try self.alloc.dupe(u8, em);
+                defer self.alloc.free(buf);
+
+                const sig = PssT.Signature.fromBytes(out);
+
+                return sig;
             }
         };
 
@@ -1046,7 +1112,19 @@ pub fn Pss(comptime Hash: type) type {
 
             const Self = @This();
 
-            fn init(sig: PssT.Signature, public_key: PublicKey, salt_len: usize) Verifier {
+            fn init(sig: PssT.Signature, public_key: PublicKey, opts: PSSOptions) Self {
+                var salt_len: usize = 0;
+                switch (opts.salt_leng) {
+                    pss_salt_length_equals_hash => {
+                        salt_len = Hash.digest_length;
+                    },
+                    else => {
+                        if (opts.salt_leng > 0) {
+                            salt_len = @as(usize, @intCast(opts.salt_leng));
+                        }
+                    },
+                }
+
                 return Verifier{
                     .h = Hash.init(.{}),
                     .sig = sig.bytes,
@@ -1251,40 +1329,36 @@ pub fn Pss(comptime Hash: type) type {
     };
 }
 
-pub fn generate(alloc: Allocator, random: std.Random, bits: usize) !KeyPair {
+// generate_key generates an RSA keypair of the given bit size using the
+// random source random.
+pub fn generate_key(alloc: Allocator, random: Random, bits: usize) !KeyPair {
     return KeyPair.generate(alloc, random, bits);
 }
 
 /// Encrypt a short message using RSAES-PKCS1-v1_5.
 pub fn encryptPkcs1v15(
     alloc: Allocator,
-    random: std.Random,
+    random: Random,
     public_key: PublicKey,
     msg: []const u8,
 ) ![]const u8 {
-    var out: [max_modulus_len]u8 = undefined;
-    const encrypted = try public_key.encryptPkcs1v15(random, msg, &out);
-    return alloc.dupe(u8, encrypted[0..]);
+    return public_key.encryptPkcs1v15(alloc, random, msg);
 }
 
 pub fn decryptPkcs1v15(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
-    var out: [max_modulus_len]u8 = undefined;
-    const decrypted = try secret_key.decryptPkcs1v15(ciphertext, &out);
-    return alloc.dupe(u8, decrypted[0..]);
+    return secret_key.decryptPkcs1v15(alloc, ciphertext);
 }
 
 /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
 pub fn encryptOaep(
     alloc: Allocator,
-    random: std.Random,
+    random: Random,
     public_key: PublicKey,
     comptime Hash: type,
     msg: []const u8,
     label: []const u8,
 ) ![]const u8 {
-    var out: [max_modulus_len]u8 = undefined;
-    const encrypted = try public_key.encryptOaep(random, Hash, msg, label, &out);
-    return alloc.dupe(u8, encrypted[0..]);
+    return public_key.encryptOaep(alloc, random, Hash, msg, label);
 }
 
 pub fn decryptOaep(
@@ -1294,22 +1368,18 @@ pub fn decryptOaep(
     ciphertext: []const u8,
     label: []const u8,
 ) ![]const u8 {
-    var out: [max_modulus_len]u8 = undefined;
-    const decrypted = try secret_key.decryptOaep(Hash, ciphertext, label, &out);
-    return alloc.dupe(u8, decrypted[0..]);
+    return secret_key.decryptOaep(alloc, Hash, ciphertext, label);
 }
 
 /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
 pub fn encryptOaepWithOptions(
     alloc: Allocator,
-    random: std.Random,
+    random: Random,
     public_key: PublicKey,
     msg: []const u8,
     opts: OAEPOptions,
 ) ![]const u8 {
-    var out: [max_modulus_len]u8 = undefined;
-    const encrypted = try public_key.encryptOaepWithOptions(random, msg, &out, opts);
-    return alloc.dupe(u8, encrypted[0..]);
+    return public_key.encryptOaepWithOptions(alloc, random, msg, opts);
 }
 
 pub fn decryptOaepWithOptions(
@@ -1318,9 +1388,7 @@ pub fn decryptOaepWithOptions(
     ciphertext: []const u8,
     opts: OAEPOptions,
 ) ![]const u8 {
-    var out: [max_modulus_len]u8 = undefined;
-    const decrypted = try secret_key.decryptOaepWithOptions(ciphertext, &out, opts);
-    return alloc.dupe(u8, decrypted[0..]);
+    return secret_key.decryptOaepWithOptions(alloc, ciphertext, opts);
 }
 
 pub fn signPkcs1v15(
@@ -1329,14 +1397,13 @@ pub fn signPkcs1v15(
     comptime Hash: type,
     msg: []const u8,
 ) ![]u8 {
-    var st = PKCS1v15(Hash).Signer.init(secret_key);
+    var st = PKCS1v15(Hash).Signer.init(alloc, secret_key);
     st.update(msg);
 
-    var out: [max_modulus_len]u8 = undefined;
-    const sig = try st.finalize(&out);
-
+    const sig = try st.finalize();
     const siged = sig.toBytes();
-    return alloc.dupe(u8, siged[0..]);
+
+    return siged;
 }
 
 pub fn verifyPkcs1v15(
@@ -1354,20 +1421,19 @@ pub fn verifyPkcs1v15(
 
 pub fn signPss(
     alloc: Allocator,
-    random: std.Random,
+    random: Random,
     secret_key: SecretKey,
     comptime Hash: type,
     msg: []const u8,
-    salt: ?[]const u8,
+    opts: PSSOptions,
 ) ![]u8 {
-    var st = Pss(Hash).Signer.init(random, secret_key, salt);
+    var st = Pss(Hash).Signer.init(alloc, random, secret_key, opts);
     st.update(msg);
 
-    var out: [max_modulus_len]u8 = undefined;
-    const sig = try st.finalize(&out);
-
+    const sig = try st.finalize();
     const siged = sig.toBytes();
-    return alloc.dupe(u8, siged[0..]);
+
+    return siged;
 }
 
 pub fn verifyPss(
@@ -1375,13 +1441,13 @@ pub fn verifyPss(
     comptime Hash: type,
     msg: []const u8,
     sig: []u8,
-    salt_len: ?usize,
+    opts: PSSOptions,
 ) !void {
     var sign = Pss(Hash).Signature.fromBytes(sig);
     try sign.verify(
         msg,
         public_key,
-        salt_len,
+        opts,
     );
 }
 
