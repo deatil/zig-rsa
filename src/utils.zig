@@ -37,13 +37,13 @@ pub fn beToLimbs(comptime slot: usize, be: []const u8) [slot]u64 {
 
 const big_capacity = (2 * max_modulus_bits) / @bitSizeOf(std.math.big.Limb) + 4;
 
-pub fn newBig(gpa: Allocator) !BigInt {
-    return BigInt.initCapacity(gpa, big_capacity);
+pub fn newBig(alloc: Allocator) !BigInt {
+    return BigInt.initCapacity(alloc, big_capacity);
 }
 
 /// Big-endian unsigned bytes -> `BigInt`.
-pub fn bigFromBytes(gpa: Allocator, bytes: []const u8) !BigInt {
-    var x = try newBig(gpa);
+pub fn bigFromBytes(alloc: Allocator, bytes: []const u8) !BigInt {
+    var x = try newBig(alloc);
     if (bytes.len == 0) {
         try x.set(0);
         return x;
@@ -56,13 +56,13 @@ pub fn bigFromBytes(gpa: Allocator, bytes: []const u8) !BigInt {
     return x;
 }
 
-pub fn bigFromFe(gpa: Allocator, fe: Fe) !BigInt {
+pub fn bigFromFe(alloc: Allocator, fe: Fe) !BigInt {
     var buf: [max_modulus_len]u8 = undefined;
     try fe.toBytes(&buf, .big);
 
     const new_buf = stripLeadingZeros(&buf);
 
-    return bigFromBytes(gpa, new_buf);
+    return bigFromBytes(alloc, new_buf);
 }
 
 /// Non-negative `BigInt` -> canonical `Fe` of `m` (fails if out of range).
@@ -74,20 +74,20 @@ pub fn feFromBig(m: Modulus, x: *const BigInt) !Fe {
     return Fe.fromBytes(m, &buf, .big);
 }
 
-pub fn bigModInverse(gpa: Allocator, e: *const BigInt, m: *const BigInt) !BigInt {
+pub fn bigModInverse(alloc: Allocator, e: *const BigInt, m: *const BigInt) !BigInt {
     // Invariants: t0*e ≡ r0, t1*e ≡ r1 (mod m).
-    var r0 = try newBig(gpa);
+    var r0 = try newBig(alloc);
     try r0.copy(m.toConst());
-    var r1 = try newBig(gpa);
+    var r1 = try newBig(alloc);
     try r1.copy(e.toConst());
-    var t0 = try newBig(gpa);
+    var t0 = try newBig(alloc);
     try t0.set(0);
-    var t1 = try newBig(gpa);
+    var t1 = try newBig(alloc);
     try t1.set(1);
-    var quot = try newBig(gpa);
-    var rem = try newBig(gpa);
-    var tmp = try newBig(gpa);
-    var new_t = try newBig(gpa);
+    var quot = try newBig(alloc);
+    var rem = try newBig(alloc);
+    var tmp = try newBig(alloc);
+    var new_t = try newBig(alloc);
 
     defer r0.deinit();
     defer r1.deinit();
@@ -134,13 +134,10 @@ pub fn reduceWide(m: Modulus, x: Uint) Fe {
 /// `null` if `r` is not a unit mod n. Extended-Euclid via `std.math.big.int` on
 /// a stack arena — variable-time, but only ever on the public modulus and a
 /// random `r`, never on secret key material.
-pub fn invModN(n_be: []const u8, r_be: []const u8, out: *[max_modulus_len]u8) ?[]const u8 {
-    var scratch: [96 * 1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&scratch);
-    const gpa = fba.allocator();
-    var r_big = bigFromBytes(gpa, r_be) catch return null;
-    var n_big = bigFromBytes(gpa, n_be) catch return null;
-    var inv = bigModInverse(gpa, &r_big, &n_big) catch return null; // gcd != 1 -> null
+pub fn invModN(alloc: Allocator, n_be: []const u8, r_be: []const u8, out: *[max_modulus_len]u8) ?[]const u8 {
+    var r_big = bigFromBytes(alloc, r_be) catch return null;
+    var n_big = bigFromBytes(alloc, n_be) catch return null;
+    var inv = bigModInverse(alloc, &r_big, &n_big) catch return null; // gcd != 1 -> null
     if (inv.bitCountAbs() > max_modulus_bits) return null;
     inv.toConst().writeTwosComplement(out, .big); // left-zero-padded to out.len
     return out[0..];
@@ -170,6 +167,7 @@ const sieve_primes = blk: {
     const limit = 1024;
     var composite = [_]bool{false} ** limit;
     var count: usize = 0;
+
     var i: usize = 3;
     while (i < limit) : (i += 2) {
         if (composite[i]) continue;
@@ -177,14 +175,17 @@ const sieve_primes = blk: {
         var j = i * i;
         while (j < limit) : (j += 2 * i) composite[j] = true;
     }
+
     var list: [count]u16 = undefined;
     var idx: usize = 0;
+
     i = 3;
     while (i < limit) : (i += 2) {
         if (composite[i]) continue;
         list[idx] = i;
         idx += 1;
     }
+
     break :blk list;
 };
 

@@ -49,15 +49,15 @@ const rsa = @import("zig-rsa");
 const std = @import("std");
 const rsa = @import("zig-rsa");
 
+const Sha256 = std.crypto.hash.sha2.Sha256;
+
 pub fn main(init: std.process.Init) !void {
     const alloc = init.arena.allocator();
 
     var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
     const random = prng.random();
 
-    const Sha256 = std.crypto.hash.sha2.Sha256;
-
-    const kp = try rsa.KeyPair.generate(alloc, random, 1024);
+    const kp = try rsa.generate_key(alloc, random, 1024);
 
     const msg = "hello rsa";
 
