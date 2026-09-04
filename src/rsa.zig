@@ -13,9 +13,9 @@ pub const utils = @import("utils.zig");
 pub const max_modulus_bits = 4096;
 pub const max_modulus_len = max_modulus_bits / 8;
 
-const FeUint = ff.Uint(max_modulus_bits);
-const Modulus = ff.Modulus(max_modulus_bits);
-const Fe = Modulus.Fe;
+pub const FeUint = ff.Uint(max_modulus_bits);
+pub const Modulus = ff.Modulus(max_modulus_bits);
+pub const Fe = Modulus.Fe;
 
 const oid_rsa_publickey = "1.2.840.113549.1.1.1";
 
@@ -491,6 +491,10 @@ pub const SecretKey = struct {
             return;
         }
 
+        if (self.primes.len < 2) {
+            return error.KeyError;
+        }
+
         var dbuf: [max_modulus_len]u8 = undefined;
         try self.d.toBytes(&dbuf, .big);
         const new_dbuf = utils.stripLeadingZeros(&dbuf);
@@ -543,14 +547,64 @@ pub const SecretKey = struct {
             return error.RsaPrecomputeFail;
         }
 
-        var crts = [_]CRTValue{};
+        var crts = [_]CRTValue{.{
+            .exp = self.public_key.n.one(),
+            .r = self.public_key.n.one(),
+            .coeff = self.public_key.n.one(),
+        }} ** 50;
+
+        var r = try utils.newBig(alloc);
+        try r.mul(&bp, &bq);
+
+        defer r.deinit();
+
+        var i: usize = 2;
+        while (i < self.primes.len) : (i += 1) {
+            var prime_buf: [max_modulus_len]u8 = undefined;
+            try self.primes[i].toBytes(&prime_buf, .big);
+            const new_prime_buf = utils.stripLeadingZeros(&prime_buf);
+
+            var prime = try utils.bigFromBytes(alloc, new_prime_buf);
+            defer prime.deinit();
+
+            var exp = try utils.newBig(alloc);
+            try exp.addScalar(&prime, -1);
+            try quot.divFloor(&exp, &bd, &exp);
+            defer exp.deinit();
+
+            var coeff = try utils.bigModInverse(alloc, &r, &prime);
+            defer coeff.deinit();
+
+            var r2 = try r.clone();
+            if (!r2.isOdd()) {
+                try r2.addScalar(&r2, 51);
+            } else {
+                try r2.addScalar(&r2, 50);
+            }
+            defer r2.deinit();
+
+            const r_hex = try r2.toString(alloc, 16, .lower);
+            const r_bytes = try utils.hexDecode(alloc, r_hex);
+            const rr = try Modulus.fromBytes(r_bytes, .big);
+
+            defer alloc.free(r_hex);
+            defer alloc.free(r_bytes);
+
+            crts[i - 2] = .{
+                .exp = try utils.feFromBig(self.public_key.n, &exp),
+                .coeff = try utils.feFromBig(self.public_key.n, &coeff),
+                .r = try utils.feFromBig(rr, &r),
+            };
+
+            try r.mul(&r, &prime);
+        }
 
         const precomputed: PrecomputedValues = .{
             .dp = dp,
             .dq = dq,
             .qinv = qinv,
 
-            .crt_values = &crts,
+            .crt_values = crts[0 .. self.primes.len - 2],
         };
 
         self.precomputed = precomputed;

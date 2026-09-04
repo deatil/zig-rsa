@@ -1,4 +1,5 @@
 const std = @import("std");
+const codecs = std.crypto.codecs;
 const Allocator = std.mem.Allocator;
 
 pub const max_modulus_bits = 4096;
@@ -14,6 +15,15 @@ pub const min_modulus_bits = 512;
 
 pub fn byteLen(bits: usize) usize {
     return std.math.divCeil(usize, bits, 8) catch unreachable;
+}
+
+pub fn hexDecode(alloc: Allocator, input: []const u8) ![]const u8 {
+    const buffer = try alloc.alloc(u8, @divFloor(input.len, 2));
+    _ = codecs.hex.decode(buffer, input) catch {
+        return "";
+    };
+
+    return buffer[0..];
 }
 
 pub fn stripLeadingZeros(bytes: []const u8) []const u8 {
