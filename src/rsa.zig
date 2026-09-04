@@ -547,6 +547,81 @@ pub const SecretKey = struct {
             return error.RsaPrecomputeFail;
         }
 
+        var crts = [_]CRTValue{};
+
+        const precomputed: PrecomputedValues = .{
+            .dp = dp,
+            .dq = dq,
+            .qinv = qinv,
+
+            .crt_values = &crts,
+        };
+
+        self.precomputed = precomputed;
+    }
+
+    // precompute CRTValue
+    pub fn precomputeLegacy(self: *Self, alloc: Allocator) !void {
+        if (self.precomputed != null) {
+            return;
+        }
+
+        if (self.primes.len < 2) {
+            return error.KeyError;
+        }
+
+        var dbuf: [max_modulus_len]u8 = undefined;
+        try self.d.toBytes(&dbuf, .big);
+        const new_dbuf = utils.stripLeadingZeros(&dbuf);
+
+        var pbuf: [max_modulus_len]u8 = undefined;
+        try self.primes[0].toBytes(&pbuf, .big);
+        const new_pbuf = utils.stripLeadingZeros(&pbuf);
+
+        var qbuf: [max_modulus_len]u8 = undefined;
+        try self.primes[1].toBytes(&qbuf, .big);
+        const new_qbuf = utils.stripLeadingZeros(&qbuf);
+
+        var bd = try utils.bigFromBytes(alloc, new_dbuf);
+        var bp = try utils.bigFromBytes(alloc, new_pbuf);
+        var bq = try utils.bigFromBytes(alloc, new_qbuf);
+
+        defer bd.deinit();
+        defer bp.deinit();
+        defer bq.deinit();
+
+        var quot = try utils.newBig(alloc);
+
+        // dP = d mod (p-1)
+        var bdp = try utils.newBig(alloc);
+        try bdp.addScalar(&bp, -1);
+        try quot.divFloor(&bdp, &bd, &bdp);
+
+        // dQ = d mod (q-1)
+        var bdq = try utils.newBig(alloc);
+        try bdq.addScalar(&bq, -1);
+        try quot.divFloor(&bdq, &bd, &bdq);
+
+        defer quot.deinit();
+        defer bdp.deinit();
+        defer bdq.deinit();
+
+        const dp = try utils.feFromBig(self.public_key.n, &bdp);
+        const dq = try utils.feFromBig(self.public_key.n, &bdq);
+
+        if (dp.isZero() or dq.isZero()) {
+            return error.RsaPrecomputeFail;
+        }
+
+        var bqinv = try utils.bigModInverse(alloc, &bq, &bp);
+        defer bqinv.deinit();
+
+        const qinv = try utils.feFromBig(self.public_key.n, &bqinv);
+
+        if (qinv.isZero()) {
+            return error.RsaPrecomputeFail;
+        }
+
         var crts = [_]CRTValue{.{
             .exp = self.public_key.n.one(),
             .r = self.public_key.n.one(),

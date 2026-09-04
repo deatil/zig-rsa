@@ -839,7 +839,7 @@ test "precompute crts" {
         .primes = &primes,
     };
 
-    try prikey.precompute(alloc);
+    try prikey.precomputeLegacy(alloc);
 
     const dp = prikey.precomputed.?.dp;
     const dq = prikey.precomputed.?.dq;
