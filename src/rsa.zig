@@ -206,14 +206,16 @@ pub const PublicKey = struct {
         // align variable names with spec
         const k = utils.byteLen(self.n.bits());
 
-        if (msg.len > k - 2 * Hash.digest_length - 2) {
+        const digest_size = Hash.digest_length;
+
+        if (msg.len > k - 2 * digest_size - 2) {
             return error.MessageTooLong;
         }
 
         // EM = 0x00 || maskedSeed || maskedDB.
         var em = try alloc.alloc(u8, k);
         em[0] = 0;
-        const seed = em[1..][0..Hash.digest_length];
+        const seed = em[1..][0..digest_size];
 
         random.bytes(seed);
 
@@ -238,24 +240,6 @@ pub const PublicKey = struct {
         try e.toBytes(em, .big);
         return em;
     }
-};
-
-pub const PrecomputedValues = struct {
-    dp: Fe, // D mod (P-1)
-    dq: Fe, // D mod (Q-1)
-    qinv: Fe, // Q^-1 mod P
-
-    // CRTValues is used for the 3rd and subsequent primes. Due to a
-    // historical accident, the CRT for the first two primes is handled
-    // differently in PKCS #1 and interoperability is sufficiently
-    // important that we mirror this.
-    crt_values: []CRTValue,
-};
-
-pub const CRTValue = struct {
-    exp: Fe, // D mod (prime-1).
-    coeff: Fe, // R·Coeff ≡ 1 mod Prime.
-    r: Fe, // product of primes prior to this (inc p and q).
 };
 
 pub const SecretKey = struct {
@@ -440,14 +424,16 @@ pub const SecretKey = struct {
         // align variable names with spec
         const k = utils.byteLen(self.public_key.n.bits());
 
+        const digest_size = Hash.digest_length;
+
         const mod = try Fe.fromBytes(self.public_key.n, ciphertext, .big);
         const exp = self.public_key.n.pow(mod, self.d) catch unreachable;
         const em = try alloc.alloc(u8, k);
         try exp.toBytes(em, .big);
 
         const y = em[0];
-        const seed = em[1..][0..Hash.digest_length];
-        const db = em[1 + Hash.digest_length ..];
+        const seed = em[1..][0..digest_size];
+        const db = em[1 + digest_size ..];
 
         var mgf_buf: [max_modulus_len]u8 = undefined;
 
@@ -505,6 +491,10 @@ pub const SecretKey = struct {
             return;
         }
 
+        var dbuf: [max_modulus_len]u8 = undefined;
+        try self.d.toBytes(&dbuf, .big);
+        const new_dbuf = utils.stripLeadingZeros(&dbuf);
+
         var pbuf: [max_modulus_len]u8 = undefined;
         try self.primes[0].toBytes(&pbuf, .big);
         const new_pbuf = utils.stripLeadingZeros(&pbuf);
@@ -513,81 +503,43 @@ pub const SecretKey = struct {
         try self.primes[1].toBytes(&qbuf, .big);
         const new_qbuf = utils.stripLeadingZeros(&qbuf);
 
-        var ebuf: [max_modulus_len]u8 = undefined;
-        try self.public_key.e.toBytes(&ebuf, .big);
-        const new_ebuf = utils.stripLeadingZeros(&ebuf);
-
-        const p = try Modulus.fromBytes(new_pbuf, .big);
-        const q = try Modulus.fromBytes(new_qbuf, .big);
-
+        var bd = try utils.bigFromBytes(alloc, new_dbuf);
         var bp = try utils.bigFromBytes(alloc, new_pbuf);
         var bq = try utils.bigFromBytes(alloc, new_qbuf);
-        var be = try utils.bigFromBytes(alloc, new_ebuf);
-
-        defer bp.deinit();
-        defer bq.deinit();
-        defer be.deinit();
-
-        // λ(n) = lcm(p-1, q-1) = (p-1)(q-1) / gcd(p-1, q-1).
-        var p1 = try utils.newBig(alloc);
-        try p1.addScalar(&bp, -1);
-        var q1 = try utils.newBig(alloc);
-        try q1.addScalar(&bq, -1);
-        var g = try utils.newBig(alloc);
-        try g.gcd(&p1, &q1);
-        var phi = try utils.newBig(alloc);
-        try phi.mul(&p1, &q1);
-        var lambda = try utils.newBig(alloc);
-        var rem = try utils.newBig(alloc);
-        try lambda.divFloor(&rem, &phi, &g); // exact: g | (p-1)(q-1)
-
-        defer p1.deinit();
-        defer q1.deinit();
-        defer g.deinit();
-        defer phi.deinit();
-        defer lambda.deinit();
-        defer rem.deinit();
-
-        // d = e⁻¹ mod λ(n); also proves gcd(e, λ(n)) = 1.
-        var bd = try utils.bigModInverse(alloc, &be, &lambda);
-        if (bd.eqlZero()) {
-            return error.RsaPrecomputeFail;
-        }
 
         defer bd.deinit();
+        defer bp.deinit();
+        defer bq.deinit();
 
-        // dP = d mod (p-1), dQ = d mod (q-1).
         var quot = try utils.newBig(alloc);
+
+        // dP = d mod (p-1)
         var bdp = try utils.newBig(alloc);
-        try quot.divFloor(&bdp, &bd, &p1);
+        try bdp.addScalar(&bp, -1);
+        try quot.divFloor(&bdp, &bd, &bdp);
+
+        // dQ = d mod (q-1)
         var bdq = try utils.newBig(alloc);
-        try quot.divFloor(&bdq, &bd, &q1);
+        try bdq.addScalar(&bq, -1);
+        try quot.divFloor(&bdq, &bd, &bdq);
 
         defer quot.deinit();
         defer bdp.deinit();
         defer bdq.deinit();
 
-        const dp = try utils.feFromBig(p, &bdp);
-        const dq = try utils.feFromBig(q, &bdq);
+        const dp = try utils.feFromBig(self.public_key.n, &bdp);
+        const dq = try utils.feFromBig(self.public_key.n, &bdq);
 
-        // Zero CRT exponents are impossible for prime p, q (e·dP ≡ 1 mod p-1);
-        // reject rather than trip `ff`'s NullExponent later on garbage input.
         if (dp.isZero() or dq.isZero()) {
             return error.RsaPrecomputeFail;
         }
 
-        // qInv = q⁻¹ mod p = (q mod p)^(p-2) mod p — Fermat inversion, valid for
-        // prime p, constant-time via `ff` (the exponent p-2 is secret).
-        const q_mod_p = utils.reduceWide(p, q.v);
-        if (q_mod_p.isZero()) {
-            return error.RsaPrecomputeFail;
-        }
-        const two = try Fe.fromPrimitive(u8, p, 2);
-        const p_minus_2 = p.sub(p.zero, two); // (0 - 2) mod p = p - 2
-        const qinv = try p.pow(q_mod_p, p_minus_2);
+        var bqinv = try utils.bigModInverse(alloc, &bq, &bp);
+        defer bqinv.deinit();
 
-        // Self-check qInv·q ≡ 1 (mod p): catches a non-prime p sneaking past.
-        if (!p.mul(qinv, q_mod_p).eql(p.one())) {
+        const qinv = try utils.feFromBig(self.public_key.n, &bqinv);
+
+        if (qinv.isZero()) {
             return error.RsaPrecomputeFail;
         }
 
@@ -603,6 +555,24 @@ pub const SecretKey = struct {
 
         self.precomputed = precomputed;
     }
+};
+
+pub const PrecomputedValues = struct {
+    dp: Fe, // D mod (P-1)
+    dq: Fe, // D mod (Q-1)
+    qinv: Fe, // Q^-1 mod P
+
+    // CRTValues is used for the 3rd and subsequent primes. Due to a
+    // historical accident, the CRT for the first two primes is handled
+    // differently in PKCS #1 and interoperability is sufficiently
+    // important that we mirror this.
+    crt_values: []CRTValue,
+};
+
+pub const CRTValue = struct {
+    exp: Fe, // D mod (prime-1).
+    coeff: Fe, // R·Coeff ≡ 1 mod Prime.
+    r: Fe, // product of primes prior to this (inc p and q).
 };
 
 pub const KeyPair = struct {
@@ -1055,7 +1025,9 @@ pub fn Pss(comptime Hash: type) type {
             }
 
             pub fn finalize(self: *Self) !PssT.Signature {
-                var hashed: [Hash.digest_length]u8 = undefined;
+                const digest_size = Hash.digest_length;
+
+                var hashed: [digest_size]u8 = undefined;
                 self.h.final(&hashed);
 
                 // RFC 4055 S3.1
@@ -1066,10 +1038,10 @@ pub fn Pss(comptime Hash: type) type {
                     var salt_len: usize = 0;
                     switch (self.opts.salt_leng) {
                         pss_salt_length_auto => {
-                            salt_len = (self.secret_key.public_key.n.bits() - 1 + 7) / 8 - 2 - Hash.digest_length;
+                            salt_len = (self.secret_key.public_key.n.bits() - 1 + 7) / 8 - 2 - digest_size;
                         },
                         pss_salt_length_equals_hash => {
-                            salt_len = Hash.digest_length;
+                            salt_len = digest_size;
                         },
                         else => {
                             if (self.opts.salt_leng > 0) {
@@ -1161,7 +1133,9 @@ pub fn Pss(comptime Hash: type) type {
             const em_len = ((em_bits - 1) / 8) + 1;
             const s_len = salt.len;
 
-            if (em_len < Hash.digest_length + s_len + 2) return error.ErrMsgTooLong;
+            const digest_size = Hash.digest_length;
+
+            if (em_len < digest_size + s_len + 2) return error.ErrMsgTooLong;
 
             // EM = maskedDB || H || 0xbc
             var em = out[0..em_len];
@@ -1169,7 +1143,7 @@ pub fn Pss(comptime Hash: type) type {
 
             // M' = (0x)00 00 00 00 00 00 00 00 || mHash || salt;
             // H = Hash(M')
-            const hash = em[em.len - 1 - Hash.digest_length ..][0..Hash.digest_length];
+            const hash = em[em.len - 1 - digest_size ..][0..digest_size];
             var hasher = Hash.init(.{});
             hasher.update(&([_]u8{0} ** 8));
             hasher.update(&msg_hash);
@@ -1177,14 +1151,14 @@ pub fn Pss(comptime Hash: type) type {
             hasher.final(hash);
 
             // DB = PS || 0x01 || salt
-            var db = em[0 .. em_len - Hash.digest_length - 1];
+            var db = em[0 .. em_len - digest_size - 1];
             @memset(db[0 .. db.len - s_len - 1], 0);
             db[db.len - s_len - 1] = 1;
             @memcpy(db[db.len - s_len ..], salt);
 
             var mgf_buf: [max_modulus_len]u8 = undefined;
-            const mgf_len = em_len - Hash.digest_length - 1;
-            const mgf_out = mgf_buf[0 .. ((mgf_len - 1) / Hash.digest_length + 1) * Hash.digest_length];
+            const mgf_len = em_len - digest_size - 1;
+            const mgf_out = mgf_buf[0 .. ((mgf_len - 1) / digest_size + 1) * digest_size];
             var dbMask = mgf1(Hash, hash, mgf_out);
             dbMask = dbMask[0..mgf_len];
 
@@ -1203,6 +1177,8 @@ pub fn Pss(comptime Hash: type) type {
         }
 
         fn emsaPSSVerify(mHash: []const u8, em: []const u8, emBit: usize, slen: usize) !void {
+            const digest_size = Hash.digest_length;
+
             var sLen = slen;
 
             // 1.   If the length of M is greater than the input limitation for
@@ -1219,13 +1195,13 @@ pub fn Pss(comptime Hash: type) type {
             std.debug.assert(emLen == em.len);
 
             // 2.   Let mHash = Hash(M), an octet string of length hLen.
-            const hlen = Hash.digest_length;
+            const hlen = digest_size;
             if (hlen != mHash.len) {
                 return error.InvalidSignature;
             }
 
             // 3.   If emLen < hLen + sLen + 2, output "inconsistent" and stop.
-            if (emLen < Hash.digest_length + sLen + 2) {
+            if (emLen < digest_size + sLen + 2) {
                 return error.InvalidSignature;
             }
 
@@ -1237,8 +1213,8 @@ pub fn Pss(comptime Hash: type) type {
 
             // 5.   Let maskedDB be the leftmost emLen - hLen - 1 octets of EM,
             //      and let H be the next hLen octets.
-            const maskedDB = em[0..(emLen - Hash.digest_length - 1)];
-            const h = em[(emLen - Hash.digest_length - 1)..(emLen - 1)][0..Hash.digest_length];
+            const maskedDB = em[0..(emLen - digest_size - 1)];
+            const h = em[(emLen - digest_size - 1)..(emLen - 1)][0..digest_size];
 
             // 6.   If the leftmost 8emLen - emBits bits of the leftmost octet in
             //      maskedDB are not all equal to zero, output "inconsistent" and
@@ -1254,13 +1230,13 @@ pub fn Pss(comptime Hash: type) type {
             }
 
             // 7.   Let dbMask = MGF(H, emLen - hLen - 1).
-            const mgf_len = emLen - Hash.digest_length - 1;
+            const mgf_len = emLen - digest_size - 1;
             var mgf_out_buf: [512]u8 = undefined;
             if (mgf_len > mgf_out_buf.len) { // Modulus > 4096 bits
                 return error.InvalidSignature;
             }
 
-            const mgf_out = mgf_out_buf[0 .. ((mgf_len - 1) / Hash.digest_length + 1) * Hash.digest_length];
+            const mgf_out = mgf_out_buf[0 .. ((mgf_len - 1) / digest_size + 1) * digest_size];
             var dbMask = mgf1(Hash, h, mgf_out);
             dbMask = dbMask[0..mgf_len];
 
@@ -1292,7 +1268,7 @@ pub fn Pss(comptime Hash: type) type {
             //      zero or if the octet at position emLen - hLen - sLen - 1 (the
             //      leftmost position is "position 1") does not have hexadecimal
             //      value 0x01, output "inconsistent" and stop.
-            const ps_len = emLen - Hash.digest_length - sLen - 2;
+            const ps_len = emLen - digest_size - sLen - 2;
             for (dbMask[0..ps_len]) |e| {
                 if (e != 0x00) {
                     return error.InvalidSignature;
@@ -1311,7 +1287,7 @@ pub fn Pss(comptime Hash: type) type {
             //      M' is an octet string of length 8 + hLen + sLen with eight
             //      initial zero octets.
             // 13.  Let H' = Hash(M'), an octet string of length hLen.
-            var h_p: [Hash.digest_length]u8 = undefined;
+            var h_p: [digest_size]u8 = undefined;
             var hasher = Hash.init(.{});
             hasher.update(&([_]u8{0} ** 8));
             hasher.update(mHash);
@@ -1451,8 +1427,10 @@ pub fn verifyPss(
 
 /// Mask generation function. Currently the only one defined.
 fn mgf1(comptime Hash: type, seed: []const u8, out: []u8) []u8 {
+    const digest_size = Hash.digest_length;
+
     var c: [@sizeOf(u32)]u8 = undefined;
-    var tmp: [Hash.digest_length]u8 = undefined;
+    var tmp: [digest_size]u8 = undefined;
 
     var i: usize = 0;
     var counter: u32 = 0;
@@ -1463,10 +1441,10 @@ fn mgf1(comptime Hash: type, seed: []const u8, out: []u8) []u8 {
         hasher.update(&c);
 
         const left = out.len - i;
-        if (left >= Hash.digest_length) {
+        if (left >= digest_size) {
             // optimization: write straight to `out`
-            hasher.final(out[i..][0..Hash.digest_length]);
-            i += Hash.digest_length;
+            hasher.final(out[i..][0..digest_size]);
+            i += digest_size;
         } else {
             hasher.final(&tmp);
             @memcpy(out[i..][0..left], tmp[0..left]);
