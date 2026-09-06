@@ -74,15 +74,6 @@ pub const PublicKey = struct {
 
         const e = try Fe.fromBytes(n, exp, .big);
 
-        if (std.debug.runtime_safety) {
-            // > the RSA public exponent e is an integer between 3 and n - 1 satisfying
-            // > GCD(e,\lambda(n)) = 1, where \lambda(n) = LCM(r_1 - 1, ..., r_u - 1)
-            const e_v = e.toPrimitive(u32) catch return error.Exponent;
-            if (!e.isOdd()) return error.Exponent;
-            if (e_v < 3) return error.Exponent;
-            if (n.v.compare(e.v) == .lt) return error.Exponent;
-        }
-
         return .{
             .n = n,
             .e = e,
@@ -239,6 +230,19 @@ pub const PublicKey = struct {
         const e = try self.n.powPublic(m, self.e);
         try e.toBytes(em, .big);
         return em;
+    }
+
+    pub fn check(self: Self) !void {
+        if (self.n.v.isZero()) {
+            return error.MissingPublicModulus;
+        }
+
+        // > the RSA public exponent e is an integer between 3 and n - 1 satisfying
+        // > GCD(e,\lambda(n)) = 1, where \lambda(n) = LCM(r_1 - 1, ..., r_u - 1)
+        const e_v = self.e.toPrimitive(u32) catch return error.Exponent;
+        if (!self.e.isOdd()) return error.Exponent;
+        if (e_v < 2) return error.PublicExponentTooSmall;
+        if (self.n.v.compare(self.e.v) == .lt) return error.Exponent;
     }
 };
 
@@ -474,14 +478,7 @@ pub const SecretKey = struct {
     }
 
     pub fn validate(self: Self) !void {
-        if (self.public_key.n.v.isZero()) {
-            return error.MissingPublicModulus;
-        }
-
-        const e_v = self.public_key.e.toPrimitive(u32) catch return error.Exponent;
-        if (e_v < 2) {
-            return error.PublicExponentTooSmall;
-        }
+        try self.public_key.check();
     }
 
     // Precompute performs some calculations that speed up private key operations
@@ -658,12 +655,7 @@ pub const SecretKey = struct {
             }
             defer r2.deinit();
 
-            const r_hex = try r2.toString(alloc, 16, .lower);
-            const r_bytes = try utils.hexDecode(alloc, r_hex);
-            const rr = try Modulus.fromBytes(r_bytes, .big);
-
-            defer alloc.free(r_hex);
-            defer alloc.free(r_bytes);
+            const rr = try utils.modulusFromBig(&r2);
 
             crts[i - 2] = .{
                 .exp = try utils.feFromBig(self.public_key.n, &exp),
@@ -828,6 +820,125 @@ pub const KeyPair = struct {
 
             return .{ .public_key = pk, .secret_key = sk };
         }
+    }
+
+    pub fn generateMultiPrimeKey(alloc: Allocator, random: Random, bits: usize, comptime nprimes: usize) !Self {
+        const e: u64 = 65537;
+        if (nprimes < 2) {
+            return error.NrimesMustBeGeTwo;
+        }
+
+        if (bits < 64) {
+            const primeLimit: f64 = @floatFromInt(@as(u64, 1) << @as(u6, @intCast(bits / nprimes)));
+            var pi = primeLimit / (@log(primeLimit) - 1.0);
+            pi /= 4.0;
+            pi /= 2.0;
+
+            const nprimes2: f64 = @floatFromInt(nprimes);
+            if (pi <= nprimes2) {
+                return error.TooFewPrimes;
+            }
+        }
+
+        var primes: [nprimes]utils.BigInt = undefined;
+
+        var eInt = try utils.bigFromInt(alloc, e);
+        defer eInt.deinit();
+
+        var primeBuf: [max_modulus_len]u8 = undefined;
+
+        var priv: Self = undefined;
+
+        while (true) {
+            var todo = bits;
+
+            if (nprimes >= 7) {
+                todo += @divFloor((nprimes - 2), 5);
+            }
+
+            var i: usize = 0;
+            while (i < nprimes) : (i += 1) {
+                const primCount = todo / (nprimes - i);
+                const primeLen = utils.byteLen(primCount);
+
+                const primeBytes = primeBuf[0..primeLen];
+                utils.generatePrime(random, primCount, e, primeBytes);
+
+                defer std.crypto.secureZero(u8, primeBuf[0..]);
+
+                const pb = utils.stripLeadingZeros(primeBytes);
+
+                primes[i] = try utils.bigFromBytes(alloc, pb);
+                todo -= primes[i].bitCountAbs();
+            }
+
+            for (primes, 0..) |prime, ii| {
+                var j: usize = 0;
+                while (j < ii) : (j += 1) {
+                    if (prime.eql(primes[j])) {
+                        continue;
+                    }
+                }
+            }
+
+            var n = try utils.bigFromInt(alloc, 1);
+            var totient = try utils.bigFromInt(alloc, 1);
+
+            defer n.deinit();
+            defer totient.deinit();
+
+            for (primes) |prime| {
+                try n.mul(&n, &prime);
+
+                var pminus1 = try utils.newBig(alloc);
+                try pminus1.addScalar(&prime, -1);
+                defer pminus1.deinit();
+
+                try totient.mul(&totient, &pminus1);
+            }
+
+            if (n.bitCountAbs() != bits) {
+                continue;
+            }
+
+            var d = utils.bigModInverse(alloc, &eInt, &totient) catch {
+                continue;
+            };
+            defer d.deinit();
+
+            const nMod = try utils.modulusFromBig(&n);
+            const eFe = try utils.feFromBig(nMod, &eInt);
+            const dFe = try utils.feFromBig(nMod, &d);
+
+            var primesFe: [nprimes]Fe = undefined;
+            for (primes, 0..) |prime, index| {
+                primesFe[index] = try utils.feFromBig(nMod, &prime);
+
+                var primeMut = prime;
+                defer primeMut.deinit();
+            }
+
+            var prikey: SecretKey = .{
+                .public_key = .{
+                    .n = nMod,
+                    .e = eFe,
+                },
+                .d = dFe,
+                .primes = &primesFe,
+            };
+            try prikey.precompute(alloc);
+
+            const pubkey: PublicKey = .{
+                .n = nMod,
+                .e = eFe,
+            };
+
+            priv.public_key = pubkey;
+            priv.secret_key = prikey;
+            break;
+        }
+
+        return priv;
     }
 
     /// Return the public key corresponding to the secret key.
@@ -1241,7 +1352,7 @@ pub fn Pss(comptime Hash: type) type {
 
                 var em_buf: [max_modulus_len]u8 = undefined;
                 const em_bits = pk.n.bits() - 1;
-                const em_len = std.math.divCeil(usize, em_bits, 8) catch unreachable;
+                const em_len = utils.byteLen(em_bits);
                 const em = em_buf[0..em_len];
 
                 const s = try Fe.fromBytes(pk.n, self.sig, .big);
@@ -1436,6 +1547,10 @@ pub fn Pss(comptime Hash: type) type {
 // random source random.
 pub fn generate_key(alloc: Allocator, random: Random, bits: usize) !KeyPair {
     return KeyPair.generate(alloc, random, bits);
+}
+
+pub fn generateMultiPrimeKey(alloc: Allocator, random: Random, bits: usize, comptime nprimes: usize) !KeyPair {
+    return KeyPair.generateMultiPrimeKey(alloc, random, bits, nprimes);
 }
 
 /// Encrypt a short message using RSAES-PKCS1-v1_5.

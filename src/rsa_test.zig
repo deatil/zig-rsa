@@ -3,7 +3,7 @@ const fmt = std.fmt;
 const testing = std.testing;
 const base64 = std.base64;
 const hash = std.crypto.hash;
-const hex = std.crypto.codecs.hex;
+const codecs = std.crypto.codecs;
 const Random = std.Random;
 const Allocator = std.mem.Allocator;
 
@@ -24,6 +24,15 @@ fn base64Decode(alloc: Allocator, input: []const u8) ![]const u8 {
     return buffer[0..];
 }
 
+pub fn hexDecode(alloc: Allocator, input: []const u8) ![]const u8 {
+    const buffer = try alloc.alloc(u8, @divFloor(input.len, 2));
+    _ = codecs.hex.decode(buffer, input) catch {
+        return "";
+    };
+
+    return buffer[0..];
+}
+
 fn testKeypair() !rsa.KeyPair {
     const keypair_bytes = @embedFile("testdata/id_rsa.der");
 
@@ -37,11 +46,11 @@ fn testKeypair() !rsa.KeyPair {
 
 test "rsa PKCS1-v1_5 encrypt and decrypt" {
     const alloc = testing.allocator;
+    const io = testing.io;
+
+    const random = utils.cryptoRand(io);
 
     const kp = try testKeypair();
-
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
 
     const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
     const enc = try kp.public_key.encryptPkcs1v15(alloc, random, msg);
@@ -68,11 +77,11 @@ test "rsa PKCS1-v1_5 encrypt and decrypt" {
 
 test "rsa OAEP encrypt and decrypt" {
     const alloc = testing.allocator;
+    const io = testing.io;
+
+    const random = utils.cryptoRand(io);
 
     const kp = try testKeypair();
-
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
 
     const msg = "rsa OAEP encrypt and decrypt";
     const label = "";
@@ -140,11 +149,11 @@ test "rsa PKCS1-v1_5 signature fail" {
 
 test "rsa PSS signature" {
     const alloc = testing.allocator;
+    const io = testing.io;
+
+    const random = utils.cryptoRand(io);
 
     const kp = try testKeypair();
-
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
 
     const msg = "rsa PSS signature";
 
@@ -179,6 +188,9 @@ test "rsa PSS signature" {
 
 test "Signer with pkcs8 key" {
     const alloc = testing.allocator;
+    const io = testing.io;
+
+    const random = utils.cryptoRand(io);
 
     const prikey = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDh/nCDmXaEqxN416b9XjV8acmbqA52uPzKbesWQRT/BPxEO2dKAURk5CkcSBDskvfzFR9TRjeDppjD1BPSEnuYKnP0SvmotoxcnBnHMfMBqGV8DSJyppu8k4y9C3MPq5C/rA8TJm0NNaJCL0BfAGkeyw+elgYifbRlm42VfYGsKVyIeEI9Qghk5Cf8yapMPfWNLKOhChXsyGExMBMonHZeseFH7UNwonNAFJMAaelhVqqmwBFqn6fBGKmvedRO7HIaiEFNKaMna6xJ5Bccjds4MhF7UC5PIdx4Bt7CfxvjrbIRYoBF2l30CNBblIhU992zPkHoaVhDkt1gq3OdO7LvAgMBAAECggEBALCJrWTv7ahnZ3efpqAIBuogTVBd8KaHjVmokds5jehFAbdfXClwYfgaT477MNVNXYmzN1w63sTl0DIxqiYRMCFHEHuGUg6cQ3tYqb50Y2spG9XTANTlF4UxEeDfX8ue7xz7kG8aNlf6TL084iEUVgmrAJGWikZJQjGZWPmtKC3OTeJY5Bev5qHVuMRe+XEM5aQc3ph+lXlOF0Qp0Eg8YRWprrev2faH6prMqu2JGomoac6sfM4QJhtEViF7Gw0XPthPTbF19IefuAwi9psMM/9CnQ+MTWN2i6IxoUdicsFuC+Wdlb3K5V/+uldNSr+ePEhcya+YTLK9IOcVwWKQHykCgYEA8XvuEribf+t0ZPtfxr+DC9nZHXbVoFx0/ARpSG+P/fp3Hn3rO9iYQ6OtZ9mEXTzf+dhYTaRWq6PbCOz6i0It+J8QSBdxU9OcQ4871mDe41IvSc1CCGMW4PeIYtNQEK0zrqhN7SMtKyUd7yAsYRCrIzMc7NjE2qJvFw5kh7xC3Q0CgYEA75Qjn5daNYSAOa/ILdOs5J/8oIaO27RNK/fSKm/btsMsyum8+YP/mWmm1MXBzG9WEKzZv5yEKOWCEVJYVsFQsGt9yLYW2WIKU5UxiuU0F1RImF/dphIbYOh7oGC3WfYKk2f+K7ftjc196ZkEkDuE2Xh1h75/67Mzztx1DbXj6OsCgYBcDRfFfyWXb5Og4smxo1M680H2H1RzmorlfnD7sbs733wE3Y8L8xanwf7Z9WqleA0Q2k1e22RGbWGTV3JyHzoS6d90+6qxf5qzjigLIkYUdUGdambfd5ZDD1ioA1Ej6kInM/TwjlYreiyc+LCyF36FHnjKOB9iEEU0jsH3k+YRCQKBgHMVLPuHX6zfhhyvxK/Gw4FbHKYbnNoKxRs+wvThoKAtJwIdv0n4TzppVttUV2CVhrkh3sM9MvrWLGGXtZmO6Oyl5dkZJuarQpydyRuYOCqQsQKI4lbY0c/+PQxwCQMsvi3KwXxMsM7yC+6/M0L5ZDp2s7ZOGvKktVlD6vJ4Eg+bAoGARnGGprSBW8dAb/s53r0paPh4k/bySrXdGEprLwk6g3S8+aylcmjUdjcIq4dEb4A/nv12dx1Sc4y99c62R0zi+TT6FYBIFDMz3HNVzO0Jr6SgC6CNVotL0D725CioR5U1NyTHHRLZth69HLuEZCZQlPJCbePXMRRHmOl1svzcVuo=";
     const pubkey = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4f5wg5l2hKsTeNem/V41fGnJm6gOdrj8ym3rFkEU/wT8RDtnSgFEZOQpHEgQ7JL38xUfU0Y3g6aYw9QT0hJ7mCpz9Er5qLaMXJwZxzHzAahlfA0icqabvJOMvQtzD6uQv6wPEyZtDTWiQi9AXwBpHssPnpYGIn20ZZuNlX2BrClciHhCPUIIZOQn/MmqTD31jSyjoQoV7MhhMTATKJx2XrHhR+1DcKJzQBSTAGnpYVaqpsARap+nwRipr3nUTuxyGohBTSmjJ2usSeQXHI3bODIRe1AuTyHceAbewn8b462yEWKARdpd9AjQW5SIVPfdsz5B6GlYQ5LdYKtznTuy7wIDAQAB";
@@ -191,9 +203,6 @@ test "Signer with pkcs8 key" {
 
     const pri_key = try rsa.SecretKey.fromPKCS8Der(prikey_bytes);
     const pub_key = try rsa.PublicKey.fromPKCS8Der(pubkey_bytes);
-
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
 
     const msg = "rsa PSS signature";
 
@@ -229,6 +238,9 @@ test "Signer with pkcs8 key or pkcs1 key" {
 
 fn test_sign_with_key_der(prikey: []const u8, pubkey: []const u8) !void {
     const alloc = testing.allocator;
+    const io = testing.io;
+
+    const random = utils.cryptoRand(io);
 
     const prikey_bytes = try base64Decode(alloc, prikey);
     const pubkey_bytes = try base64Decode(alloc, pubkey);
@@ -241,9 +253,6 @@ fn test_sign_with_key_der(prikey: []const u8, pubkey: []const u8) !void {
 
     try std.testing.expectEqual(256, pri_key.public_key.size());
     try std.testing.expectEqual(256, pub_key.size());
-
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
 
     const msg = "rsa PSS signature";
 
@@ -314,9 +323,9 @@ test "SecretKey validate" {
 
 test "KeyPair generate" {
     const alloc = testing.allocator;
+    const io = testing.io;
 
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
+    const random = utils.cryptoRand(io);
 
     const kp = try rsa.KeyPair.generate(alloc, random, 1024);
 
@@ -336,9 +345,9 @@ test "KeyPair generate" {
 
 test "rsa PKCS1-v1_5 function encrypt and decrypt" {
     const alloc = testing.allocator;
+    const io = testing.io;
 
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
+    const random = utils.cryptoRand(io);
 
     const kp = try testKeypair();
 
@@ -365,9 +374,9 @@ test "rsa PKCS1-v1_5 function encrypt and decrypt" {
 
 test "rsa OAEP function encrypt and decrypt" {
     const alloc = testing.allocator;
+    const io = testing.io;
 
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
+    const random = utils.cryptoRand(io);
 
     const kp = try testKeypair();
 
@@ -432,11 +441,11 @@ test "rsa PKCS1-v1_5 function signature fail" {
 
 test "rsa PSS function signature" {
     const alloc = testing.allocator;
+    const io = testing.io;
+
+    const random = utils.cryptoRand(io);
 
     const kp = try testKeypair();
-
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
 
     const msg = "rsa PSS signature";
 
@@ -472,9 +481,9 @@ test "rsa PSS function signature" {
 
 test "rsa PSS function signature with generate_key" {
     const alloc = testing.allocator;
+    const io = testing.io;
 
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
+    const random = utils.cryptoRand(io);
 
     const kp = try rsa.generate_key(alloc, random, 1024);
 
@@ -607,9 +616,9 @@ test "rsa PKCS1-v1_5 function signature with hash" {
 
 test "rsa OAEP function encrypt and decrypt with options" {
     const alloc = testing.allocator;
+    const io = testing.io;
 
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
+    const random = utils.cryptoRand(io);
 
     const sha2 = std.crypto.hash.sha2;
 
@@ -750,9 +759,9 @@ test "rsa list check" {
 
 test "Key check" {
     const alloc = testing.allocator;
+    const io = testing.io;
 
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
+    const random = utils.cryptoRand(io);
 
     const kp = try rsa.KeyPair.generate(alloc, random, 1024);
     const pri_key = kp.secret_key;
@@ -776,9 +785,9 @@ test "Key check" {
 
 fn test_publicKey_size() !void {
     const alloc = testing.allocator;
+    const io = testing.io;
 
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
+    const random = utils.cryptoRand(io);
 
     {
         const kp = try rsa.generate_key(alloc, random, 512);
@@ -806,17 +815,68 @@ test "PublicKey size" {
 }
 
 fn feFromHex(alloc: Allocator, n: rsa.Modulus, str: []const u8) !rsa.Fe {
-    const bytes = try utils.hexDecode(alloc, str);
+    const bytes = try hexDecode(alloc, str);
     defer alloc.free(bytes);
 
     const out = try rsa.Fe.fromBytes(n, bytes, .big);
     return out;
 }
 
-test "precompute crts" {
+test "SecretKey precompute from hex" {
     const alloc = testing.allocator;
 
-    const nbytes = try utils.hexDecode(alloc, "9d0f502cf5365bf3949f1bfaa444fa9c9fd0f9126e2d86a753f276e5d5ff813be4f33b88603a6e569b83a363cbb17e0e7c1dd86bc067b9955eec933e08ab75dba44b758a95439e327087d4d5e017c8f79da4d7c7d694ec397fbfeb04a7ee265af15407db70b840aacc03703dc74bf48707f00e781536bf971b61d38d5825838ebd4bed1db8b3f508e15e2e622839b3b0e1fe051b51b2834801df59131e11e7e8cf2120173f4254b9e5a3cab2dcb14f6d4abf087e58876b880eb1d488af21bf80e565939afd08a3ba046444180a955d1f19a40bb51ebcd2a4178df97ee9cf8f145d13d84eef37ea61577e65de80271a3dfc2fbbca2dc5f3ac867aa48c7477b767");
+    const nbytes = try hexDecode(alloc, "9d0f502cf5365bf3949f1bfaa444fa9c9fd0f9126e2d86a753f276e5d5ff813be4f33b88603a6e569b83a363cbb17e0e7c1dd86bc067b9955eec933e08ab75dba44b758a95439e327087d4d5e017c8f79da4d7c7d694ec397fbfeb04a7ee265af15407db70b840aacc03703dc74bf48707f00e781536bf971b61d38d5825838ebd4bed1db8b3f508e15e2e622839b3b0e1fe051b51b2834801df59131e11e7e8cf2120173f4254b9e5a3cab2dcb14f6d4abf087e58876b880eb1d488af21bf80e565939afd08a3ba046444180a955d1f19a40bb51ebcd2a4178df97ee9cf8f145d13d84eef37ea61577e65de80271a3dfc2fbbca2dc5f3ac867aa48c7477b767");
+    const n = try rsa.Modulus.fromBytes(nbytes, .big);
+    defer alloc.free(nbytes);
+
+    const e = try feFromHex(alloc, n, "010001");
+    const d = try feFromHex(alloc, n, "63d392db30747f975f948ddd0e4205a43d743e8b775a1a670a55673b087ca0f0a7c1edc9ed97d5ffd852a02c53109a95ac4feff9f4ce38c7f7109939e99ac98b746ebde3faa182d07e73e754955da8cfb1f44f6e66363bbb0436c0b331e58d9d6a1c45ee3543f75e57d3aba8a89edf6a602235a01fa3afbce49b9632159faa70b570ac22d54af63e1c2f09869d91a0a4cbe4f2f4f0ba6c7469df09a1a121b7044df20b0e90089ae1e4d194bd72c85ead2db6de51b69961b0454b2ed3ac0ed9c1cd75dac818a6cb2d47ec0d950907ad14d68812b4ec83766795369c81fa10eab57c9774bf83f2d9eebc5f96c58d0a864bf005b905cf26deda7c5220754e2ee2b9");
+    const p = try feFromHex(alloc, n, "cc558bc7e22c34a9b5012f75ed39ccb284f2f4a64af78652b5cb6f77999202344161192ae63a5cd048d1943b80b98a66e15142187efc2d471f0f7d258843790d87b190a2a522a299b3b8ccf1d250b3003394d29ff6a9a79bbf9b08219d45969147dad74b44ad223adbebf48a2a0dd9ad394a8838fc8bbadc7025001663e4b46b");
+    const q = try feFromHex(alloc, n, "c4c5b893ac7215a18383cba6b27bb4e0f8a7890649da0c26c317d1703c16ae7f875686002f840857d814d75ada28b7ac54e3b7a1db6af3a8b67b780beb90a32f80eebb839bdeecf309faca921dd00aeb359aa4b1b93c0357df1c52dcd992548f6739b243630a6149293f8480d38b6ce2b4d603dc5d9d21914a08e3cf020067f5");
+
+    const c1 = try feFromHex(alloc, n, "c4c5b893ac7215a18383cba6b27bb4e0f8a7890647da0c26c317d1703c16ae7f875686002f840857d814d75ada28b7ac54e3b7a1db6af3a8b67b780beb90a32f80eebb839bdeecf309faca921dd00aeb359aa4b1b93c0357df1c52dcd992548f6739b243630a6149293f8480d38b6ce2b4d603dc5d9d21914a08e3cf020067f5");
+    const c2 = try feFromHex(alloc, n, "c4c5b893ac7215a18383cba6b27bb4e0f8a7890647da0c26c317d1703c16ae7f875686002f840857d814d75ada28b7ac54e3b7a1db6af3a8b67b780beb90a32f80eebb839bdeecf309faca921dd00aeb359aa4b1b93c0357df1c52dcd992548f6739b243630a6149293f8480d38b6ce2b4d603dc5d9d21914a08e3cf020067f8");
+
+    var primes = [_]rsa.Fe{ p, q, c1, c2 };
+
+    var prikey: rsa.SecretKey = .{
+        .public_key = .{
+            .n = n,
+            .e = e,
+        },
+        .d = d,
+        .primes = &primes,
+    };
+
+    try prikey.precompute(alloc);
+
+    const dp = prikey.precomputed.?.dp;
+    const dq = prikey.precomputed.?.dq;
+    const qinv = prikey.precomputed.?.qinv;
+
+    var dpbuf: [rsa.max_modulus_len]u8 = undefined;
+    try dp.toBytes(&dpbuf, .big);
+    const new_dpbuf = utils.stripLeadingZeros(&dpbuf);
+
+    var dqbuf: [rsa.max_modulus_len]u8 = undefined;
+    try dq.toBytes(&dqbuf, .big);
+    const new_dqbuf = utils.stripLeadingZeros(&dqbuf);
+
+    var qinvbuf: [rsa.max_modulus_len]u8 = undefined;
+    try qinv.toBytes(&qinvbuf, .big);
+    const new_qinvbuf = utils.stripLeadingZeros(&qinvbuf);
+
+    try testing.expectFmt("8a869c63005453c791aca20e62ab42b8ec2501f312f3c81e9e9cb28ef48fe5eaa3403e9db4c37054cc69390335fb9376b7de2cdf0a87cff25d7e54ab733bbaff8f34b4076fc8914f7e66149b04a82d123fe5eefcff6e78f0bfef4c8ded5f55fa5c2a62b6e67231b8918bdf9723778c51417be3ea2e5c546c49a2ebf241fab4cd", "{x}", .{new_dpbuf});
+    try testing.expectFmt("6fcd7c1b840eea5573f94d9c30ab7351a456e4d74adcf6ac8b8b1bf82e5c20d7db19015857a7286a691f2661bbb508ef84e8422d581383d067a6edc5b019e56e974e8e02b06cd0ab230f794bde5e97e59ef677ff77252f2d1d5ae58610a541209de13d75666fbe692863abb0db01cc635fa67e591663b26fefe5ef326e8bb685", "{x}", .{new_dqbuf});
+    try testing.expectFmt("a3025ed7af8f1b9536f34fa9cd0f6e647b61bf31017926070b77565b5f2572d9c83003e307749f78a90e5b3bf15df64371ec82308ddf3a39c35501c816fb01ab21632152d71652cb43e2796b47dd29de4511371ec56e760f9d35c14e5e836db3b492866fc401ee59d0e8d64121a55695fc2ef495861c0ca2d42ff54ca622bcb0", "{x}", .{new_qinvbuf});
+
+    try std.testing.expectEqual(0, prikey.precomputed.?.crt_values.len);
+}
+
+test "SecretKey precomputeLegacy crts" {
+    const alloc = testing.allocator;
+
+    const nbytes = try hexDecode(alloc, "9d0f502cf5365bf3949f1bfaa444fa9c9fd0f9126e2d86a753f276e5d5ff813be4f33b88603a6e569b83a363cbb17e0e7c1dd86bc067b9955eec933e08ab75dba44b758a95439e327087d4d5e017c8f79da4d7c7d694ec397fbfeb04a7ee265af15407db70b840aacc03703dc74bf48707f00e781536bf971b61d38d5825838ebd4bed1db8b3f508e15e2e622839b3b0e1fe051b51b2834801df59131e11e7e8cf2120173f4254b9e5a3cab2dcb14f6d4abf087e58876b880eb1d488af21bf80e565939afd08a3ba046444180a955d1f19a40bb51ebcd2a4178df97ee9cf8f145d13d84eef37ea61577e65de80271a3dfc2fbbca2dc5f3ac867aa48c7477b767");
     const n = try rsa.Modulus.fromBytes(nbytes, .big);
     defer alloc.free(nbytes);
 
@@ -902,4 +962,47 @@ test "precompute crts" {
         try testing.expectFmt("5512624023ed5ef4f7b4a4f2c159a73075a6e45cf56dabfe654b7e65b7c701e1a9119d7a0fd285f79072f838be82285c7076802ff5f1817ae1a1905d0920c48905db7e4212d51745ce775b48558adea4e1a13cd41aba042a8af3942e3265e93ccb72ec55074d75afa30cadf5ddedf74c57d38254e813895af3b0f82f2f699f3b", "{x}", .{new_coeff_buf});
         try testing.expectFmt("78b90768b98df340623395bbdaaacf866f405b94e51b8a53f1586d576ef603bd97bb07ca8e439ffbf9b2276acce1985c12224f7b31041b880fc0a9fe0ddb076feb0139056cd82af5a5c5eb13630976f94486d5e0c51021ba4ecfddf58d972911164659610639bb0ad1c7acd138802ca1fbd0ecd3f8892bdaddf4efb2735f19d4b3903ed1767ba94e719e46b9794a484f16386e76bfb9802a28bc63e6dd1ed6c60f86c993d10a81e9fbcc7631501e32a0348049000b76d176b8efc250b3bb2828ec5adcd92fec125837a9c30811aa7cadc57eeacc51c82e67d4ea1d45efd97aaed198c23c123fd2ec067c98fafa034c3fd1eb1f879fc1bc06c26c1dbf110d18593afc32238db74f01f6e66d132517bff2178f14ff58ffe54bab1e020e99efe61c48f06ac1583cbc5cd1a8e95a817319f785d290674ddba2c57cd1c58c36192f8dfdc2e3ee94171fc494176d1a0de940c235ea4c3ae5dfaaad838591016088c666e82a5e88a4b65a75cb01e96a176b70054e40531653499371fa228dff6f5cf693", "{x}", .{new_r_buf});
     }
+}
+
+test "KeyPair generateMultiPrimeKey" {
+    const alloc = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
+    const random = prng.random();
+
+    const kp = try rsa.KeyPair.generateMultiPrimeKey(alloc, random, 1024, 4);
+
+    const msg = "rsa PSS signature";
+
+    var sig = rsa.Pss(TestHash).Signer.init(alloc, random, kp.secret_key, .{});
+    sig.update(msg);
+    const signed = try sig.finalize();
+
+    const signed_bytes = signed.toBytes();
+    try testing.expectEqual(true, signed_bytes.len > 0);
+
+    defer alloc.free(signed_bytes);
+
+    try signed.verify(msg, kp.public_key, .{});
+}
+
+test "SecretKey generateMultiPrimeKey" {
+    const alloc = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
+    const random = prng.random();
+
+    const kp = try rsa.generateMultiPrimeKey(alloc, random, 1024, 4);
+    const prikey = kp.secret_key;
+    var pubkey = kp.public_key;
+    try pubkey.check();
+
+    try std.testing.expectEqual(4, prikey.primes.len);
+
+    var crt2_buf: [rsa.max_modulus_len]u8 = undefined;
+    try prikey.primes[3].toBytes(&crt2_buf, .big);
+    const new_crt2_buf = utils.stripLeadingZeros(&crt2_buf);
+
+    try std.testing.expectEqual(true, new_crt2_buf.len > 0);
+    // try testing.expectFmt("ecdcc6259721c1adb5af2642e081877d99a27157157c09051857fcfdd56dfa61", "{x}", .{new_crt2_buf});
 }

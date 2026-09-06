@@ -1,5 +1,4 @@
 const std = @import("std");
-const codecs = std.crypto.codecs;
 const Allocator = std.mem.Allocator;
 
 pub const max_modulus_bits = 4096;
@@ -8,7 +7,7 @@ pub const Uint = std.crypto.ff.Uint(max_modulus_bits);
 pub const Modulus = std.crypto.ff.Modulus(max_modulus_bits);
 pub const Fe = Modulus.Fe;
 
-const BigInt = std.math.big.int.Managed;
+pub const BigInt = std.math.big.int.Managed;
 
 pub const max_modulus_len = max_modulus_bits / 8;
 pub const min_modulus_bits = 512;
@@ -17,19 +16,20 @@ pub fn byteLen(bits: usize) usize {
     return std.math.divCeil(usize, bits, 8) catch unreachable;
 }
 
-pub fn hexDecode(alloc: Allocator, input: []const u8) ![]const u8 {
-    const buffer = try alloc.alloc(u8, @divFloor(input.len, 2));
-    _ = codecs.hex.decode(buffer, input) catch {
-        return "";
-    };
-
-    return buffer[0..];
-}
-
 pub fn stripLeadingZeros(bytes: []const u8) []const u8 {
     var i: usize = 0;
     while (i < bytes.len and bytes[i] == 0) : (i += 1) {}
     return bytes[i..];
+}
+
+pub fn cryptoRand(io: std.Io) std.Random {
+    var random_bytes: [std.Random.Ascon.secret_seed_length]u8 = undefined;
+    io.random(&random_bytes);
+
+    var prng = std.Random.Ascon.init(random_bytes);
+    const random = prng.random();
+
+    return random;
 }
 
 pub fn beToLimbs(comptime slot: usize, be: []const u8) [slot]u64 {
@@ -49,6 +49,10 @@ const big_capacity = (2 * max_modulus_bits) / @bitSizeOf(std.math.big.Limb) + 4;
 
 pub fn newBig(alloc: Allocator) !BigInt {
     return BigInt.initCapacity(alloc, big_capacity);
+}
+
+pub fn bigFromInt(alloc: Allocator, val: anytype) !BigInt {
+    return BigInt.initSet(alloc, val);
 }
 
 /// Big-endian unsigned bytes -> `BigInt`.
@@ -77,11 +81,19 @@ pub fn bigFromFe(alloc: Allocator, fe: Fe) !BigInt {
 
 /// Non-negative `BigInt` -> canonical `Fe` of `m` (fails if out of range).
 pub fn feFromBig(m: Modulus, x: *const BigInt) !Fe {
-    if (!x.isPositive() and !x.eqlZero()) return error.InvalidPrivateKey;
-    if (x.bitCountAbs() > max_modulus_bits) return error.InvalidPrivateKey;
+    if (!x.isPositive() and !x.eqlZero()) return error.InvalidSet;
+    if (x.bitCountAbs() > max_modulus_bits) return error.InvalidSet;
     var buf: [max_modulus_len]u8 = undefined;
     x.toConst().writeTwosComplement(&buf, .big);
     return Fe.fromBytes(m, &buf, .big);
+}
+
+pub fn modulusFromBig(x: *const BigInt) !Modulus {
+    if (!x.isPositive() and !x.eqlZero()) return error.InvalidSet;
+    if (x.bitCountAbs() > max_modulus_bits) return error.InvalidSet;
+    var buf: [max_modulus_len]u8 = undefined;
+    x.toConst().writeTwosComplement(&buf, .big);
+    return Modulus.fromBytes(&buf, .big);
 }
 
 pub fn bigModInverse(alloc: Allocator, e: *const BigInt, m: *const BigInt) !BigInt {
@@ -137,6 +149,7 @@ pub fn reduceWide(m: Modulus, x: Uint) Fe {
         @memset(xx.limbs_buffer[xx.limbs_len..m.v.limbs_len], 0);
         xx.limbs_len = m.v.limbs_len;
     }
+
     return m.reduce(xx);
 }
 
@@ -303,7 +316,9 @@ pub fn isProbablePrime(m: Modulus, random: std.Random) bool {
 pub fn generatePrime(random: std.Random, prime_bits: usize, e: u64, out: []u8) void {
     std.debug.assert(out.len == byteLen(prime_bits));
     std.debug.assert(prime_bits >= 128); // callers: >= 256 (bits >= 512)
+
     const top_mask = @as(u8, 0xff) >> @intCast(8 * out.len - prime_bits);
+
     candidates: while (true) {
         random.bytes(out);
         out[0] &= top_mask;
@@ -326,6 +341,94 @@ pub fn generatePrime(random: std.Random, prime_bits: usize, e: u64, out: []u8) v
         // Odd, >= 3, <= max_modulus_len bytes: Modulus.fromBytes can't fail.
         const m = Modulus.fromBytes(out, .big) catch unreachable;
         if (isProbablePrime(m, random)) return;
+    }
+}
+
+pub fn isProbablePrimes(m: Modulus) !bool {
+    const n_len = byteLen(m.bits());
+
+    // n - 1 = d * 2^s with d odd: n is odd, so n-1 is just n with the low
+    // bit cleared, s = ctz(n-1) >= 1, d = (n-1) >> s.
+    var d_buf: [max_modulus_len]u8 = undefined;
+    defer std.crypto.secureZero(u8, d_buf[0..n_len]);
+
+    m.toBytes(d_buf[0..n_len], .big) catch unreachable; // buffer is exactly byteLen(bits)
+    d_buf[n_len - 1] &= 0xfe;
+
+    var s: usize = 0;
+    var i: usize = n_len;
+    while (i > 0) {
+        i -= 1;
+        if (d_buf[i] == 0) {
+            s += 8;
+        } else {
+            s += @ctz(d_buf[i]);
+            break;
+        }
+    }
+
+    shrBytesBe(d_buf[0..n_len], s);
+    const d_bytes = stripLeadingZeros(d_buf[0..n_len]);
+
+    const one = m.one();
+    const n_minus_1 = m.sub(m.zero, one);
+
+    const small_primes = [_]u64{ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37 };
+
+    for (small_primes) |prime| {
+        const a = try Fe.fromPrimitive(u64, m, prime);
+
+        // a^d mod n — constant-time modexp (the exponent d is n-derived).
+        var x = try m.powWithEncodedExponent(a, d_bytes, .big); // d is odd, never 0
+        if (x.eql(one) or x.eql(n_minus_1)) return true;
+
+        var j: usize = 1;
+        while (j < s) : (j += 1) {
+            x = m.sq(x);
+            if (x.eql(n_minus_1)) return true;
+            if (x.eql(one)) return false;
+        }
+
+        // never hit n-1: `a` witnesses compositeness
+        return false;
+    }
+
+    return true;
+}
+
+pub fn randPrime(random: std.Random, bits: usize, out: []u8) !void {
+    if (bits < 2) {
+        return error.PrimeSizeTooShort;
+    }
+
+    var b = @as(u32, @intCast(bits % 8));
+    if (b == 0) {
+        b = 8;
+    }
+
+    var bytes = out[0 .. (bits + 7) / 8];
+
+    while (true) {
+        random.bytes(bytes);
+
+        bytes[0] &= @as(u8, @intCast(@as(isize, @intCast(1)) << @as(u6, @intCast(b)) - 1));
+
+        if (b >= 2) {
+            bytes[0] |= @as(u8, @intCast(@as(isize, @intCast(3)) << @as(u6, @intCast(b - 2))));
+        } else {
+            // Here b==1, because b cannot be zero.
+            bytes[0] |= 1;
+            if (bytes.len > 1) {
+                bytes[1] |= 0x80;
+            }
+        }
+        // Make the value odd since an even number this large certainly isn't prime.
+        bytes[bytes.len - 1] |= 1;
+
+        const p = try Modulus.fromBytes(bytes, .big);
+        if (try isProbablePrimes(p)) {
+            return;
+        }
     }
 }
 
