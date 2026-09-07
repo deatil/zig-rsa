@@ -17,6 +17,8 @@ pub const FeUint = ff.Uint(max_modulus_bits);
 pub const Modulus = ff.Modulus(max_modulus_bits);
 pub const Fe = Modulus.Fe;
 
+pub const BigInt = std.math.big.int.Managed;
+
 const oid_rsa_publickey = "1.2.840.113549.1.1.1";
 
 const PrikeyData = struct {
@@ -257,6 +259,14 @@ pub const SecretKey = struct {
 
     const Self = @This();
 
+    pub fn deinit(self: *Self, alloc: Allocator) void {
+        alloc.free(self.primes);
+
+        if (self.precomputed) |precomputed| {
+            alloc.free(precomputed.crt_values);
+        }
+    }
+
     pub fn public(self: Self) PublicKey {
         return self.public_key;
     }
@@ -283,37 +293,18 @@ pub const SecretKey = struct {
     }
 
     pub fn fromBytes(
-        nbytes: []const u8,
-        ebytes: []const u8,
-        dbytes: []const u8,
-        pbytes: []const u8,
-        qbytes: []const u8,
+        alloc: Allocator,
+        n: []const u8,
+        e: []const u8,
+        d: []const u8,
+        p: []const u8,
+        q: []const u8,
     ) !Self {
-        const pubkey = try PublicKey.fromBytes(nbytes, ebytes);
-
-        const d = try Fe.fromBytes(pubkey.n, dbytes, .big);
-        const p = try Fe.fromBytes(pubkey.n, pbytes, .big);
-        const q = try Fe.fromBytes(pubkey.n, qbytes, .big);
-
-        // check that n = p * q
-        const expected_zero = pubkey.n.mul(p, q);
-        if (!expected_zero.isZero()) return error.KeyMismatch;
-
-        // > The RSA private exponent d is a positive integer less than n
-        // > satisfying e * d == 1 (mod \lambda(n)),
-        if (!d.isOdd()) return error.Exponent;
-        if (d.v.compare(pubkey.n.v) != .lt) return error.Exponent;
-
-        var primes = [_]Fe{ p, q };
-
-        return .{
-            .public_key = pubkey,
-            .d = d,
-            .primes = &primes,
-        };
+        const seckey = try Self.fromBytesInternal(alloc, n, e, d, p, q);
+        return seckey;
     }
 
-    pub fn fromDer(bytes: []const u8) !Self {
+    pub fn fromDer(alloc: Allocator, bytes: []const u8) !Self {
         var parser = der.Parser{ .bytes = bytes };
         _ = try parser.expectSequence();
         const version = try parser.expectInt(u8);
@@ -325,10 +316,8 @@ pub const SecretKey = struct {
         const prime1 = try parser.expectPrimitive(.integer);
         const prime2 = try parser.expectPrimitive(.integer);
 
-        switch (version) {
-            0 => {},
-            1 => {},
-            else => return error.InvalidVersion,
+        if (version > 1) {
+            return error.InvalidVersion;
         }
 
         const n = parser.view(mod);
@@ -338,10 +327,50 @@ pub const SecretKey = struct {
         const p = parser.view(prime1);
         const q = parser.view(prime2);
 
-        return Self.fromBytes(n, e, d, p, q);
+        var seckey = try Self.fromBytesInternal(alloc, n, e, d, p, q);
+
+        if (version == 0) {
+            return seckey;
+        }
+
+        defer seckey.deinit(alloc);
+
+        const dp = try parser.expectPrimitive(.integer);
+        const dq = try parser.expectPrimitive(.integer);
+        const qinv = try parser.expectPrimitive(.integer);
+        _ = .{ dp, dq, qinv };
+
+        var primes = try alloc.alloc(Fe, 50);
+        defer alloc.free(primes);
+
+        primes[0] = seckey.primes[0];
+        primes[1] = seckey.primes[1];
+
+        _ = try parser.expectSequence();
+
+        var index: usize = 2;
+        while (!parser.eof()) : (index += 1) {
+            const prime_seq = try parser.expectSequence();
+
+            // get crts first
+            const prime_int = try parser.expectPrimitive(.integer);
+            const prime_bytes = parser.view(prime_int);
+
+            // crt_seq = [prime, exp, coeff]
+            const prime = try Fe.fromBytes(seckey.public_key.n, prime_bytes, .big);
+            primes[index] = prime;
+
+            parser.seek(prime_seq.slice.end);
+        }
+
+        return .{
+            .public_key = seckey.public_key,
+            .d = seckey.d,
+            .primes = try alloc.dupe(Fe, primes[0..index]),
+        };
     }
 
-    pub fn fromPKCS8Der(bytes: []const u8) !Self {
+    pub fn fromPKCS8Der(alloc: Allocator, bytes: []const u8) !Self {
         var parser = der.Parser{ .bytes = bytes };
         _ = try parser.expectSequence();
 
@@ -359,15 +388,71 @@ pub const SecretKey = struct {
         const prikey = try parser.expect(.universal, false, .octetstring);
 
         const prikey_bytes = parser.view(prikey);
-        return Self.fromDer(prikey_bytes);
+        return Self.fromDer(alloc, prikey_bytes);
     }
 
-    pub fn fromDerAuto(bytes: []const u8) !Self {
-        const sk = Self.fromPKCS8Der(bytes) catch {
-            return Self.fromDer(bytes);
+    pub fn fromDerAuto(alloc: Allocator, bytes: []const u8) !Self {
+        const sk = Self.fromPKCS8Der(alloc, bytes) catch {
+            return Self.fromDer(alloc, bytes);
         };
 
         return sk;
+    }
+
+    pub fn fromBytesWithPrecompute(
+        alloc: Allocator,
+        n: []const u8,
+        e: []const u8,
+        d: []const u8,
+        p: []const u8,
+        q: []const u8,
+    ) !Self {
+        var seckey = try Self.fromBytes(alloc, n, e, d, p, q);
+        try seckey.precompute(alloc);
+
+        return seckey;
+    }
+
+    pub fn fromDerWithPrecompute(alloc: Allocator, bytes: []const u8) !Self {
+        var seckey = try Self.fromDer(alloc, bytes);
+        try seckey.precompute(alloc);
+
+        return seckey;
+    }
+
+    pub fn fromPKCS8DerWithPrecompute(alloc: Allocator, bytes: []const u8) !Self {
+        var seckey = try Self.fromPKCS8Der(alloc, bytes);
+        try seckey.precompute(alloc);
+
+        return seckey;
+    }
+
+    fn fromBytesInternal(
+        alloc: Allocator,
+        nbytes: []const u8,
+        ebytes: []const u8,
+        dbytes: []const u8,
+        pbytes: []const u8,
+        qbytes: []const u8,
+    ) !Self {
+        const pubkey = try PublicKey.fromBytes(nbytes, ebytes);
+
+        const d = try Fe.fromBytes(pubkey.n, dbytes, .big);
+        const p = try Fe.fromBytes(pubkey.n, pbytes, .big);
+        const q = try Fe.fromBytes(pubkey.n, qbytes, .big);
+
+        // > The RSA private exponent d is a positive integer less than n
+        // > satisfying e * d == 1 (mod \lambda(n)),
+        if (!d.isOdd()) return error.Exponent;
+        if (d.v.compare(pubkey.n.v) != .lt) return error.Exponent;
+
+        const primes = [_]Fe{ p, q };
+
+        return .{
+            .public_key = pubkey,
+            .d = d,
+            .primes = try alloc.dupe(Fe, primes[0..]),
+        };
     }
 
     pub fn decryptPkcs1v15(self: Self, alloc: Allocator, ciphertext: []const u8) ![]const u8 {
@@ -484,29 +569,17 @@ pub const SecretKey = struct {
     // Precompute performs some calculations that speed up private key operations
     // in the future.
     pub fn precompute(self: *Self, alloc: Allocator) !void {
-        if (self.precomputed != null) {
-            return;
-        }
-
         if (self.primes.len < 2) {
-            return error.KeyError;
+            return error.InvalidKey;
         }
 
-        var dbuf: [max_modulus_len]u8 = undefined;
-        try self.d.toBytes(&dbuf, .big);
-        const new_dbuf = utils.stripLeadingZeros(&dbuf);
+        if (self.primes.len > 2) {
+            return self.precomputeLegacy(alloc);
+        }
 
-        var pbuf: [max_modulus_len]u8 = undefined;
-        try self.primes[0].toBytes(&pbuf, .big);
-        const new_pbuf = utils.stripLeadingZeros(&pbuf);
-
-        var qbuf: [max_modulus_len]u8 = undefined;
-        try self.primes[1].toBytes(&qbuf, .big);
-        const new_qbuf = utils.stripLeadingZeros(&qbuf);
-
-        var bd = try utils.bigFromBytes(alloc, new_dbuf);
-        var bp = try utils.bigFromBytes(alloc, new_pbuf);
-        var bq = try utils.bigFromBytes(alloc, new_qbuf);
+        var bd = try utils.bigFromFe(alloc, self.d);
+        var bp = try utils.bigFromFe(alloc, self.primes[0]);
+        var bq = try utils.bigFromFe(alloc, self.primes[1]);
 
         defer bd.deinit();
         defer bp.deinit();
@@ -558,30 +631,14 @@ pub const SecretKey = struct {
     }
 
     // precompute CRTValue
-    pub fn precomputeLegacy(self: *Self, alloc: Allocator) !void {
-        if (self.precomputed != null) {
-            return;
-        }
-
+    fn precomputeLegacy(self: *Self, alloc: Allocator) !void {
         if (self.primes.len < 2) {
-            return error.KeyError;
+            return error.InvalidKey;
         }
 
-        var dbuf: [max_modulus_len]u8 = undefined;
-        try self.d.toBytes(&dbuf, .big);
-        const new_dbuf = utils.stripLeadingZeros(&dbuf);
-
-        var pbuf: [max_modulus_len]u8 = undefined;
-        try self.primes[0].toBytes(&pbuf, .big);
-        const new_pbuf = utils.stripLeadingZeros(&pbuf);
-
-        var qbuf: [max_modulus_len]u8 = undefined;
-        try self.primes[1].toBytes(&qbuf, .big);
-        const new_qbuf = utils.stripLeadingZeros(&qbuf);
-
-        var bd = try utils.bigFromBytes(alloc, new_dbuf);
-        var bp = try utils.bigFromBytes(alloc, new_pbuf);
-        var bq = try utils.bigFromBytes(alloc, new_qbuf);
+        var bd = try utils.bigFromFe(alloc, self.d);
+        var bp = try utils.bigFromFe(alloc, self.primes[0]);
+        var bq = try utils.bigFromFe(alloc, self.primes[1]);
 
         defer bd.deinit();
         defer bp.deinit();
@@ -619,11 +676,8 @@ pub const SecretKey = struct {
             return error.RsaPrecomputeFail;
         }
 
-        var crts = [_]CRTValue{.{
-            .exp = self.public_key.n.one(),
-            .r = self.public_key.n.one(),
-            .coeff = self.public_key.n.one(),
-        }} ** 50;
+        var crts = try alloc.alloc(CRTValue, 50);
+        defer alloc.free(crts);
 
         var r = try utils.newBig(alloc);
         try r.mul(&bp, &bq);
@@ -671,7 +725,7 @@ pub const SecretKey = struct {
             .dq = dq,
             .qinv = qinv,
 
-            .crt_values = crts[0 .. self.primes.len - 2],
+            .crt_values = try alloc.dupe(CRTValue, crts[0 .. self.primes.len - 2]),
         };
 
         self.precomputed = precomputed;
@@ -814,7 +868,7 @@ pub const KeyPair = struct {
             var sk = SecretKey{
                 .public_key = pk,
                 .d = d,
-                .primes = &primes,
+                .primes = try alloc.dupe(Fe, primes[0..]),
             };
             try sk.precompute(alloc);
 
@@ -822,7 +876,7 @@ pub const KeyPair = struct {
         }
     }
 
-    pub fn generateMultiPrimeKey(alloc: Allocator, random: Random, bits: usize, comptime nprimes: usize) !Self {
+    pub fn generateMultiPrimeKey(alloc: Allocator, random: Random, bits: usize, nprimes: usize) !Self {
         const e: u64 = 65537;
         if (nprimes < 2) {
             return error.NrimesMustBeGeTwo;
@@ -840,7 +894,8 @@ pub const KeyPair = struct {
             }
         }
 
-        var primes: [nprimes]utils.BigInt = undefined;
+        var primes = try alloc.alloc(BigInt, nprimes);
+        defer alloc.free(primes);
 
         var eInt = try utils.bigFromInt(alloc, e);
         defer eInt.deinit();
@@ -861,6 +916,7 @@ pub const KeyPair = struct {
                 const primCount = todo / (nprimes - i);
                 const primeLen = utils.byteLen(primCount);
 
+                // todo: when std have check randPrime api
                 const primeBytes = primeBuf[0..primeLen];
                 utils.generatePrime(random, primCount, e, primeBytes);
 
@@ -910,7 +966,9 @@ pub const KeyPair = struct {
             const eFe = try utils.feFromBig(nMod, &eInt);
             const dFe = try utils.feFromBig(nMod, &d);
 
-            var primesFe: [nprimes]Fe = undefined;
+            var primesFe = try alloc.alloc(Fe, nprimes);
+            defer alloc.free(primesFe);
+
             for (primes, 0..) |prime, index| {
                 primesFe[index] = try utils.feFromBig(nMod, &prime);
 
@@ -924,7 +982,7 @@ pub const KeyPair = struct {
                     .e = eFe,
                 },
                 .d = dFe,
-                .primes = &primesFe,
+                .primes = try alloc.dupe(Fe, primesFe[0..]),
             };
             try prikey.precompute(alloc);
 

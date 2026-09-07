@@ -135,7 +135,9 @@ pub fn bigModInverse(alloc: Allocator, e: *const BigInt, m: *const BigInt) !BigI
     }
 
     // r0 = gcd(e, m); must be 1 for e to be invertible.
-    if (r0.toConst().orderAgainstScalar(1) != .eq) return error.InvalidPrivateKey;
+    if (r0.toConst().orderAgainstScalar(1) != .eq) {
+        return error.InvalidInputData;
+    }
 
     // t0*e ≡ 1 (mod m); normalize t0 (possibly negative) into [0, m).
     try quot.divFloor(&rem, &t0, m);

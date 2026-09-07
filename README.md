@@ -1,6 +1,6 @@
 ## Zig-rsa 
 
-A RSA library for zig.
+An RSA library for zig.
 
 
 ### Env

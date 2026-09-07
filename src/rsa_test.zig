@@ -34,10 +34,15 @@ pub fn hexDecode(alloc: Allocator, input: []const u8) ![]const u8 {
 }
 
 fn testKeypair() !rsa.KeyPair {
+    const alloc = testing.allocator;
+
     const keypair_bytes = @embedFile("testdata/id_rsa.der");
 
-    const sk = try rsa.SecretKey.fromDer(keypair_bytes);
+    var sk = try rsa.SecretKey.fromDer(alloc, keypair_bytes);
+    try sk.precompute(alloc);
     const kp = try rsa.KeyPair.fromSecretKey(sk);
+
+    defer sk.deinit(alloc);
 
     try std.testing.expectEqual(2048, kp.public_key.n.bits());
 
@@ -201,8 +206,10 @@ test "Signer with pkcs8 key" {
     defer alloc.free(prikey_bytes);
     defer alloc.free(pubkey_bytes);
 
-    const pri_key = try rsa.SecretKey.fromPKCS8Der(prikey_bytes);
+    var pri_key = try rsa.SecretKey.fromPKCS8Der(alloc, prikey_bytes);
     const pub_key = try rsa.PublicKey.fromPKCS8Der(pubkey_bytes);
+
+    defer pri_key.deinit(alloc);
 
     const msg = "rsa PSS signature";
 
@@ -248,8 +255,10 @@ fn test_sign_with_key_der(prikey: []const u8, pubkey: []const u8) !void {
     defer alloc.free(prikey_bytes);
     defer alloc.free(pubkey_bytes);
 
-    const pri_key = try rsa.SecretKey.fromDerAuto(prikey_bytes);
+    var pri_key = try rsa.SecretKey.fromDerAuto(alloc, prikey_bytes);
     const pub_key = try rsa.PublicKey.fromDerAuto(pubkey_bytes);
+
+    defer pri_key.deinit(alloc);
 
     try std.testing.expectEqual(256, pri_key.public_key.size());
     try std.testing.expectEqual(256, pub_key.size());
@@ -277,8 +286,9 @@ test "SecretKey precompute" {
 
     defer alloc.free(prikey_bytes);
 
-    var pri_key = try rsa.SecretKey.fromPKCS8Der(prikey_bytes);
-    try pri_key.precompute(alloc);
+    var pri_key = try rsa.SecretKey.fromPKCS8DerWithPrecompute(alloc, prikey_bytes);
+
+    defer pri_key.deinit(alloc);
 
     const dp = pri_key.precomputed.?.dp;
     const dq = pri_key.precomputed.?.dq;
@@ -304,7 +314,7 @@ test "SecretKey precompute" {
     // const pub_key_der = try pub_key.makeDer(alloc);
     // defer alloc.free(pub_key_der);
 
-    // const pri_key2 = try rsa.SecretKey.fromDer(pub_key_der);
+    // const pri_key2 = try rsa.SecretKey.fromDer(alloc, pub_key_der);
     // try std.testing.expectEqual(8, pri_key2.len);
 }
 
@@ -317,7 +327,9 @@ test "SecretKey validate" {
 
     defer alloc.free(prikey_bytes);
 
-    var pri_key = try rsa.SecretKey.fromPKCS8Der(prikey_bytes);
+    var pri_key = try rsa.SecretKey.fromPKCS8Der(alloc, prikey_bytes);
+    defer pri_key.deinit(alloc);
+
     try pri_key.validate();
 }
 
@@ -328,6 +340,8 @@ test "KeyPair generate" {
     const random = utils.cryptoRand(io);
 
     const kp = try rsa.KeyPair.generate(alloc, random, 1024);
+    var secret_key = kp.secret_key;
+    defer secret_key.deinit(alloc);
 
     const msg = "rsa PSS signature";
 
@@ -486,6 +500,9 @@ test "rsa PSS function signature with generate_key" {
     const random = utils.cryptoRand(io);
 
     const kp = try rsa.generate_key(alloc, random, 1024);
+
+    var secret_key = kp.secret_key;
+    defer secret_key.deinit(alloc);
 
     const msg = "rsa PSS function signature";
 
@@ -680,8 +697,10 @@ test "rsa OAEP function encrypt and decrypt with options" {
         const prikey_bytes = try base64Decode(alloc, prikey);
         defer alloc.free(prikey_bytes);
 
-        var pri_key = try rsa.SecretKey.fromDer(prikey_bytes);
+        var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
         try pri_key.precompute(alloc);
+
+        defer pri_key.deinit(alloc);
 
         const check2 = "d1c26a4556c1e747c0388eec95785f38840ea37b55b8577bafc2f59e079da4e7712916839d3b1d9c12bb2a9869ead29471968c8e09d9b7f40587fc4a480cc19d908ff2d76102da695cfd2d4d33d2f1c96450ba1f99532bce9945fba0410ed88e25e648e536200fd6d46152d999034ad561c1086dcdbd7f3ce8aa9617f73efdaa75ddf88888184323c2beefc27822729cc19bc5d3018e76f6a380b6d012a9fd4cb42ba702df06ab8201243b99c5d337824d92178f69458216473c439d6ff2417a32dffbf138061e4e7f97dc72a8dea6bf45a64c6ab2a1105655bf36dd71b3bd6fa38041556d0fd4a8193194ce1ceb78bf3cd5e6bbfa763eb36afe2f146960de0c";
         var enc2: [256]u8 = undefined;
@@ -706,8 +725,8 @@ test "rsa list check" {
     const prikey_bytes = try base64Decode(alloc, prikey);
     defer alloc.free(prikey_bytes);
 
-    var pri_key = try rsa.SecretKey.fromDer(prikey_bytes);
-    try pri_key.precompute(alloc);
+    var pri_key = try rsa.SecretKey.fromDerWithPrecompute(alloc, prikey_bytes);
+    defer pri_key.deinit(alloc);
 
     const pub_key = pri_key.public_key;
 
@@ -767,6 +786,9 @@ test "Key check" {
     const pri_key = kp.secret_key;
     const pub_key = kp.public_key;
 
+    var secret_key = kp.secret_key;
+    defer secret_key.deinit(alloc);
+
     {
         const pri_key2 = kp.secret_key;
         const pub_key2 = pri_key.public();
@@ -777,6 +799,9 @@ test "Key check" {
 
     {
         const kp2 = try rsa.KeyPair.generate(alloc, random, 1024);
+
+        var secret_key2 = kp2.secret_key;
+        defer secret_key2.deinit(alloc);
 
         try std.testing.expectEqual(false, kp2.secret_key.equal(pri_key));
         try std.testing.expectEqual(false, kp2.public_key.equal(pub_key));
@@ -792,21 +817,33 @@ fn test_publicKey_size() !void {
     {
         const kp = try rsa.generate_key(alloc, random, 512);
         try std.testing.expectEqual(64, kp.public_key.size());
+
+        var secret_key = kp.secret_key;
+        defer secret_key.deinit(alloc);
     }
 
     {
         const kp = try rsa.generate_key(alloc, random, 1024);
         try std.testing.expectEqual(128, kp.public_key.size());
+
+        var secret_key = kp.secret_key;
+        defer secret_key.deinit(alloc);
     }
 
     {
         const kp = try rsa.generate_key(alloc, random, 2048);
         try std.testing.expectEqual(256, kp.public_key.size());
+
+        var secret_key = kp.secret_key;
+        defer secret_key.deinit(alloc);
     }
 
     {
         const kp = try rsa.generate_key(alloc, random, 4096);
         try std.testing.expectEqual(512, kp.public_key.size());
+
+        var secret_key = kp.secret_key;
+        defer secret_key.deinit(alloc);
     }
 }
 
@@ -834,10 +871,7 @@ test "SecretKey precompute from hex" {
     const p = try feFromHex(alloc, n, "cc558bc7e22c34a9b5012f75ed39ccb284f2f4a64af78652b5cb6f77999202344161192ae63a5cd048d1943b80b98a66e15142187efc2d471f0f7d258843790d87b190a2a522a299b3b8ccf1d250b3003394d29ff6a9a79bbf9b08219d45969147dad74b44ad223adbebf48a2a0dd9ad394a8838fc8bbadc7025001663e4b46b");
     const q = try feFromHex(alloc, n, "c4c5b893ac7215a18383cba6b27bb4e0f8a7890649da0c26c317d1703c16ae7f875686002f840857d814d75ada28b7ac54e3b7a1db6af3a8b67b780beb90a32f80eebb839bdeecf309faca921dd00aeb359aa4b1b93c0357df1c52dcd992548f6739b243630a6149293f8480d38b6ce2b4d603dc5d9d21914a08e3cf020067f5");
 
-    const c1 = try feFromHex(alloc, n, "c4c5b893ac7215a18383cba6b27bb4e0f8a7890647da0c26c317d1703c16ae7f875686002f840857d814d75ada28b7ac54e3b7a1db6af3a8b67b780beb90a32f80eebb839bdeecf309faca921dd00aeb359aa4b1b93c0357df1c52dcd992548f6739b243630a6149293f8480d38b6ce2b4d603dc5d9d21914a08e3cf020067f5");
-    const c2 = try feFromHex(alloc, n, "c4c5b893ac7215a18383cba6b27bb4e0f8a7890647da0c26c317d1703c16ae7f875686002f840857d814d75ada28b7ac54e3b7a1db6af3a8b67b780beb90a32f80eebb839bdeecf309faca921dd00aeb359aa4b1b93c0357df1c52dcd992548f6739b243630a6149293f8480d38b6ce2b4d603dc5d9d21914a08e3cf020067f8");
-
-    var primes = [_]rsa.Fe{ p, q, c1, c2 };
+    var primes = [_]rsa.Fe{ p, q };
 
     var prikey: rsa.SecretKey = .{
         .public_key = .{
@@ -845,10 +879,12 @@ test "SecretKey precompute from hex" {
             .e = e,
         },
         .d = d,
-        .primes = &primes,
+        .primes = try alloc.dupe(rsa.Fe, primes[0..]),
     };
 
     try prikey.precompute(alloc);
+
+    defer prikey.deinit(alloc);
 
     const dp = prikey.precomputed.?.dp;
     const dq = prikey.precomputed.?.dq;
@@ -896,10 +932,12 @@ test "SecretKey precomputeLegacy crts" {
             .e = e,
         },
         .d = d,
-        .primes = &primes,
+        .primes = try alloc.dupe(rsa.Fe, primes[0..]),
     };
 
-    try prikey.precomputeLegacy(alloc);
+    try prikey.precompute(alloc);
+
+    defer prikey.deinit(alloc);
 
     const dp = prikey.precomputed.?.dp;
     const dq = prikey.precomputed.?.dq;
@@ -972,6 +1010,9 @@ test "KeyPair generateMultiPrimeKey" {
 
     const kp = try rsa.KeyPair.generateMultiPrimeKey(alloc, random, 1024, 4);
 
+    var secret_key = kp.secret_key;
+    defer secret_key.deinit(alloc);
+
     const msg = "rsa PSS signature";
 
     var sig = rsa.Pss(TestHash).Signer.init(alloc, random, kp.secret_key, .{});
@@ -988,11 +1029,15 @@ test "KeyPair generateMultiPrimeKey" {
 
 test "SecretKey generateMultiPrimeKey" {
     const alloc = testing.allocator;
+    const io = testing.io;
 
-    var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
-    const random = prng.random();
+    const random = utils.cryptoRand(io);
 
     const kp = try rsa.generateMultiPrimeKey(alloc, random, 1024, 4);
+
+    var secret_key = kp.secret_key;
+    defer secret_key.deinit(alloc);
+
     const prikey = kp.secret_key;
     var pubkey = kp.public_key;
     try pubkey.check();
@@ -1005,4 +1050,79 @@ test "SecretKey generateMultiPrimeKey" {
 
     try std.testing.expectEqual(true, new_crt2_buf.len > 0);
     // try testing.expectFmt("ecdcc6259721c1adb5af2642e081877d99a27157157c09051857fcfdd56dfa61", "{x}", .{new_crt2_buf});
+}
+
+test "SecretKey precomputeLegacy crts from der" {
+    const alloc = testing.allocator;
+
+    const prikey_str = "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";
+    const prikey_bytes = try base64Decode(alloc, prikey_str);
+    defer alloc.free(prikey_bytes);
+
+    var prikey = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
+    defer prikey.deinit(alloc);
+
+    try prikey.precompute(alloc);
+
+    const dp = prikey.precomputed.?.dp;
+    const dq = prikey.precomputed.?.dq;
+    const qinv = prikey.precomputed.?.qinv;
+
+    var dpbuf: [rsa.max_modulus_len]u8 = undefined;
+    try dp.toBytes(&dpbuf, .big);
+    const new_dpbuf = utils.stripLeadingZeros(&dpbuf);
+
+    var dqbuf: [rsa.max_modulus_len]u8 = undefined;
+    try dq.toBytes(&dqbuf, .big);
+    const new_dqbuf = utils.stripLeadingZeros(&dqbuf);
+
+    var qinvbuf: [rsa.max_modulus_len]u8 = undefined;
+    try qinv.toBytes(&qinvbuf, .big);
+    const new_qinvbuf = utils.stripLeadingZeros(&qinvbuf);
+
+    try testing.expectFmt("e39d9f3ee100117ea0fc619939ef7a9d7c8126f5a279bb6f32b4bc7710fb5d39fe13f7ca54fb05069e03a390c1499408c969ff92294657d4a35ce5c512008f58854034e65be339748df6fc1dfb88bb2f67da64391fa9f97f149adb288ba002eb97bb2e573d28f459bbcfb4f2adde2569c3e1155c4bd2ea805f14cf773678f947", "{x}", .{new_dpbuf});
+    try testing.expectFmt("9376ff293ca849e0cce2e857fc20672a4d4142bc2b128c2c508b90564e2c041d7802da9c1092773804eea08a6d27027c7b51bef3269f1f1c4d6ae12c0bc7c906cb6e5649b8fb7c50311aba45b670a6e525cccb96e9f2f24147f4539259b5bded2acbf1e94e5a85891f0e691d3720181a405717169f2e54ccb44dd9e7616b5f31", "{x}", .{new_dqbuf});
+    try testing.expectFmt("fbf3737cee586d5ac19408b32627f10f1eed8373d565db95b9a26cb92ca52e94c2452fee6feb2e6da9e4b6a91bf224865d8057e51e76e8eed90ee02248526338c290bf23d7df670ed4ef5bf0e54fae03d1a55e2481d14ffba65b977c8fc60227de33fc1e7f163189b607f692ff68d924b90074d652372134fc2063f5bb58fad0", "{x}", .{new_qinvbuf});
+
+    try std.testing.expectEqual(2, prikey.precomputed.?.crt_values.len);
+
+    {
+        const crt = prikey.precomputed.?.crt_values[0];
+
+        var exp_buf: [rsa.max_modulus_len]u8 = undefined;
+        try crt.exp.toBytes(&exp_buf, .big);
+        const new_exp_buf = utils.stripLeadingZeros(&exp_buf);
+
+        var coeff_buf: [rsa.max_modulus_len]u8 = undefined;
+        try crt.coeff.toBytes(&coeff_buf, .big);
+        const new_coeff_buf = utils.stripLeadingZeros(&coeff_buf);
+
+        var r_buf: [rsa.max_modulus_len]u8 = undefined;
+        try crt.r.toBytes(&r_buf, .big);
+        const new_r_buf = utils.stripLeadingZeros(&r_buf);
+
+        try testing.expectFmt("b0ab31619a4d469991e79c916c986555bd06eb268952e047849f9774a01166b7f856eb9f9dc403890f93be100456d7073d539f8a48178a0dba4eb8ba953bd0254dac196c1a900ebabca19b885d9e8b953a0bf8b17987ea7d0c47f86677a16ef056255707f0ba35444b0b52dae181e5592793daf08cc130bdebb63b0539830c33", "{x}", .{new_exp_buf});
+        try testing.expectFmt("465ae830d82510208b8d091f518f7f4e644e45bb2e4b9b015f267d75f49b86dc0fbe655d9009909d4383ae196edec0e258ab0d10f716446c4fb438235c20ee7605789489cab50e8b2f7a990399c183b0915d66dc3771ce06e1890279bb6facb4db6fe8b2b22f58d2ba43610ac5780bd8bc7b2c9483b6ea4bef306bc7b14166b4", "{x}", .{new_coeff_buf});
+        try testing.expectFmt("e50b74c4f097c87debbc2a33bd3d44a5c3fed269b24f4ef32a9e7936645b807366ff691b7be95e8b3340f3cf90f9a93e825a8d16afd0763898b847b3cccf20c95791ce021c52c65e4a9321b4712bd94d22f8830971de54618f1ad010124b5c063fb15303b5178e9dd5ad1ad43f07118df3e5405a4aca9691f16fc29f8578ad885abe16d0aa9bbd78d46aa8418c3205380f98a6b5e39f3dbc33108477733ef8981990b6f6a5f33218b35529f76fe0414991f5b11532ddb3d108e5148dc14504ecd7d475adec6f76d844dcc686fcf459beb1bf8076d8eaf6b0fbada3b90a714073ba4b447c87816a148c853714ae4b5b58ba2000e56dbfae765073d6f24a15818f", "{x}", .{new_r_buf});
+    }
+
+    {
+        const crt = prikey.precomputed.?.crt_values[1];
+
+        var exp_buf: [rsa.max_modulus_len]u8 = undefined;
+        try crt.exp.toBytes(&exp_buf, .big);
+        const new_exp_buf = utils.stripLeadingZeros(&exp_buf);
+
+        var coeff_buf: [rsa.max_modulus_len]u8 = undefined;
+        try crt.coeff.toBytes(&coeff_buf, .big);
+        const new_coeff_buf = utils.stripLeadingZeros(&coeff_buf);
+
+        var r_buf: [rsa.max_modulus_len]u8 = undefined;
+        try crt.r.toBytes(&r_buf, .big);
+        const new_r_buf = utils.stripLeadingZeros(&r_buf);
+
+        try testing.expectFmt("2a2cf497cae16d1dd9711366815a162a03f113b3ad1b6b61057e9ccb34260a43e62c1f45d339b75042f8c1c03728932fce2a7bd29a648a8e98e74a7324be2a22319c0e8f8e153c0973d90eac48b305d9007b3cdb7104c8063141e49a454be30770e48e26b25fa8f583b23c74b5a2250fdb727a49adb21c58ce856c7ec3ee6801", "{x}", .{new_exp_buf});
+        try testing.expectFmt("2888b5e3cb121fc112eaf2594c810f89c0d5f9241f19140e205043cc53173bd1173b1d7e3b18476b978ef7d52d62ff9930aba869ca93f75551cc388b1d95731cf5b7408453e523acc217a349b6dddf0e2e0198905f53d032902c288e5c2eec6c8aa5e17378871f50c4ef9a2998befbb77779e2e4a155ed212c15c3f0baca14d6", "{x}", .{new_coeff_buf});
+        try testing.expectFmt("e45a3a93475707dda0dc7e9f53bf5609486ed92537a6d825132de0c87d12574135f2c6bb3472d7989841181fd752f13e02c39be1124b4326f5bb53484a60b08e805db642f6419fb9e4d64fd2361aad024a128188bacdf4d4521cc1674b92454fe43c2c762713cda6325afc388ce7b4de40e0a37edbd8638f3320a749570ed2099c8353ac28043bb5b35388f132972f5f43cda9a4eb07af4a35a5fbc8b74794f25ffdcd02b0f67868d87a7bc39e7b7b0846206b1b3f004a31caff4756775a1e1096a38368dd01f3ebeb16f926f1b64656f835ed0fae784a8ebf97a7ba50850ee7c04089e70605a80c8c9a388be442d5772b110f07c08f22be823fc1943c519b508559c9a2e7c4ff838e37f5cc30a9cbebdaf8b85934431bd07bfb8832a7be446f9ebea8b0d43bfbc0e6b2f3d47a680c6f1cee7c73ff39ba03e1ce76cacea6d99548ad65e340cf405b72f2c083a488d38a45796b2c95a38c0d0035ce19b77d570fe179759739ce2e1c31425e6a6fe1cec907cec6926595bfa1dfe3fa1539cc7785", "{x}", .{new_r_buf});
+    }
 }
