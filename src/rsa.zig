@@ -919,6 +919,7 @@ pub const KeyPair = struct {
                 // todo: when std have check randPrime api
                 const primeBytes = primeBuf[0..primeLen];
                 utils.generatePrime(random, primCount, e, primeBytes);
+                // try utils.randPrime(random, primCount, primeBytes);
 
                 defer std.crypto.secureZero(u8, primeBuf[0..]);
 

@@ -24,7 +24,7 @@ fn base64Decode(alloc: Allocator, input: []const u8) ![]const u8 {
     return buffer[0..];
 }
 
-pub fn hexDecode(alloc: Allocator, input: []const u8) ![]const u8 {
+fn hexDecode(alloc: Allocator, input: []const u8) ![]const u8 {
     const buffer = try alloc.alloc(u8, @divFloor(input.len, 2));
     _ = codecs.hex.decode(buffer, input) catch {
         return "";
@@ -1002,6 +1002,23 @@ test "SecretKey precomputeLegacy crts" {
     }
 }
 
+fn TestRNG(io: std.Io) type {
+    return struct {
+        pub fn fill(_: *anyopaque, buffer: []u8) void {
+            io.random(buffer);
+        }
+    };
+}
+
+fn getIoRand(io: std.Io) std.Random {
+    const test_rng: std.Random = .{
+        .ptr = undefined,
+        .fillFn = TestRNG(io).fill,
+    };
+
+    return test_rng;
+}
+
 test "KeyPair generateMultiPrimeKey" {
     const alloc = testing.allocator;
 
@@ -1124,5 +1141,65 @@ test "SecretKey precomputeLegacy crts from der" {
         try testing.expectFmt("2a2cf497cae16d1dd9711366815a162a03f113b3ad1b6b61057e9ccb34260a43e62c1f45d339b75042f8c1c03728932fce2a7bd29a648a8e98e74a7324be2a22319c0e8f8e153c0973d90eac48b305d9007b3cdb7104c8063141e49a454be30770e48e26b25fa8f583b23c74b5a2250fdb727a49adb21c58ce856c7ec3ee6801", "{x}", .{new_exp_buf});
         try testing.expectFmt("2888b5e3cb121fc112eaf2594c810f89c0d5f9241f19140e205043cc53173bd1173b1d7e3b18476b978ef7d52d62ff9930aba869ca93f75551cc388b1d95731cf5b7408453e523acc217a349b6dddf0e2e0198905f53d032902c288e5c2eec6c8aa5e17378871f50c4ef9a2998befbb77779e2e4a155ed212c15c3f0baca14d6", "{x}", .{new_coeff_buf});
         try testing.expectFmt("e45a3a93475707dda0dc7e9f53bf5609486ed92537a6d825132de0c87d12574135f2c6bb3472d7989841181fd752f13e02c39be1124b4326f5bb53484a60b08e805db642f6419fb9e4d64fd2361aad024a128188bacdf4d4521cc1674b92454fe43c2c762713cda6325afc388ce7b4de40e0a37edbd8638f3320a749570ed2099c8353ac28043bb5b35388f132972f5f43cda9a4eb07af4a35a5fbc8b74794f25ffdcd02b0f67868d87a7bc39e7b7b0846206b1b3f004a31caff4756775a1e1096a38368dd01f3ebeb16f926f1b64656f835ed0fae784a8ebf97a7ba50850ee7c04089e70605a80c8c9a388be442d5772b110f07c08f22be823fc1943c519b508559c9a2e7c4ff838e37f5cc30a9cbebdaf8b85934431bd07bfb8832a7be446f9ebea8b0d43bfbc0e6b2f3d47a680c6f1cee7c73ff39ba03e1ce76cacea6d99548ad65e340cf405b72f2c083a488d38a45796b2c95a38c0d0035ce19b77d570fe179759739ce2e1c31425e6a6fe1cec907cec6926595bfa1dfe3fa1539cc7785", "{x}", .{new_r_buf});
+    }
+}
+
+test "isProbablePrimes" {
+    const alloc = testing.allocator;
+
+    {
+        const str_hex = "fd63871450183926a1362e2de456851c8b447da19e2eaae88ed250c49c39cad75c3e8e8b7a12864c15f18fa9ad6eaba52cce50677f6d0f83ece405bb2e06f46a7d0a278583dff7563b7e79e8e872842b2aea145ffab9c80135960fa0393a82e584241586dffdd9870d4190c46cc49e446cbdf7012effd9665290ca2b8de1076b";
+        const bytes = try hexDecode(alloc, str_hex);
+        defer alloc.free(bytes);
+
+        const p = try rsa.Modulus.fromBytes(bytes, .big);
+        const res = try utils.isProbablePrimes(p);
+        try testing.expectEqual(true, res);
+    }
+
+    {
+        const str_hex = "e767b4ae0eabea93ca9268a9e4a3b509cf606e9cdb7bd6e64f0c30f369aa5879002c71a984773571084127c055d307cb38e5a801fee2d55579bafee3dbbc5b97df2d26462b09ab16f54d9f59923e81a43b0d913f448a8e7acda5fd25d0d39828116a44bbd0a73dd5833ef0cbcd1527a941665029862c1bebc119c219078b4b6d";
+        const bytes = try hexDecode(alloc, str_hex);
+        defer alloc.free(bytes);
+
+        const p = try rsa.Modulus.fromBytes(bytes, .big);
+        const res = try utils.isProbablePrimes(p);
+        try testing.expectEqual(true, res);
+    }
+
+    {
+        const str_hex = "e767b4ae0eabea93ca9268a9e4b3b509cf606e9cdb7bd6e64f0c30f369aa5879002c71a984773571084127c055d307cb38e5a801fee2d55579bafee3dbbc5b97df2d26462b09ab16f54d9f59923e81a43b0d913f448a8e7acda5fd25d0d39828116a44bbd0a73dd5833ef0cbcd1527a941665029862c1bebc119c219078b4b6d";
+        const bytes = try hexDecode(alloc, str_hex);
+        defer alloc.free(bytes);
+
+        const p = try rsa.Modulus.fromBytes(bytes, .big);
+        const res = try utils.isProbablePrimes(p);
+        try testing.expectEqual(false, res);
+    }
+}
+
+test "randPrime" {
+    const testRun = false;
+
+    if (testRun) {
+        const io = testing.io;
+
+        const random: std.Random = .{
+            .ptr = undefined,
+            .fillFn = TestRNG(io).fill,
+        };
+
+        var primeBuf: [utils.max_modulus_len]u8 = undefined;
+        const todo = 1024;
+        const nprimes = 2;
+        const i = 0;
+
+        const primCount = todo / (nprimes - i);
+        const primeLen = utils.byteLen(primCount);
+
+        const primeBytes = primeBuf[0..primeLen];
+        try utils.randPrime(random, primCount, primeBytes);
+
+        try std.testing.expectEqual(true, primeBytes.len > 0);
     }
 }

@@ -375,19 +375,20 @@ pub fn isProbablePrimes(m: Modulus) !bool {
     const one = m.one();
     const n_minus_1 = m.sub(m.zero, one);
 
-    const small_primes = [_]u64{ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37 };
+    const small_primes = [_]u64{ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127 };
 
-    for (small_primes) |prime| {
-        const a = try Fe.fromPrimitive(u64, m, prime);
+    var round: usize = 0;
+    rounds: while (round < small_primes.len) : (round += 1) {
+        const a = try Fe.fromPrimitive(u64, m, small_primes[round]);
 
         // a^d mod n — constant-time modexp (the exponent d is n-derived).
         var x = try m.powWithEncodedExponent(a, d_bytes, .big); // d is odd, never 0
-        if (x.eql(one) or x.eql(n_minus_1)) return true;
+        if (x.eql(one) or x.eql(n_minus_1)) continue :rounds;
 
         var j: usize = 1;
         while (j < s) : (j += 1) {
             x = m.sq(x);
-            if (x.eql(n_minus_1)) return true;
+            if (x.eql(n_minus_1)) continue :rounds;
             if (x.eql(one)) return false;
         }
 
@@ -424,6 +425,7 @@ pub fn randPrime(random: std.Random, bits: usize, out: []u8) !void {
                 bytes[1] |= 0x80;
             }
         }
+
         // Make the value odd since an even number this large certainly isn't prime.
         bytes[bytes.len - 1] |= 1;
 
