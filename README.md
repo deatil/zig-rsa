@@ -59,9 +59,14 @@ pub fn main(init: std.process.Init) !void {
 
     const kp = try rsa.generate_key(alloc, random, 1024);
 
+    var secret_key = kp.secret_key;
+    defer secret_key.deinit(alloc);
+
+    const public_key = kp.public_key;
+
     const msg = "hello rsa";
 
-    const signature = try rsa.signPkcs1v15(alloc, kp.secret_key, Sha256, msg);
+    const signature = try rsa.signPkcs1v15(alloc, secret_key, Sha256, msg);
     defer alloc.free(signature);
     
     // output: 
@@ -70,7 +75,7 @@ pub fn main(init: std.process.Init) !void {
 
     // ==============
 
-    const veri = rsa.verifyPkcs1v15(kp.public_key, Sha256, msg, signature);
+    const veri = rsa.verifyPkcs1v15(public_key, Sha256, msg, signature);
     var status: bool = true;
     if (veri) |_| {
         status = true;
