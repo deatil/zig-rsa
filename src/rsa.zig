@@ -427,6 +427,14 @@ pub const SecretKey = struct {
         return seckey;
     }
 
+    pub fn fromDerAutoWithPrecompute(alloc: Allocator, bytes: []const u8) !Self {
+        const sk = Self.fromPKCS8DerWithPrecompute(alloc, bytes) catch {
+            return Self.fromDerWithPrecompute(alloc, bytes);
+        };
+
+        return sk;
+    }
+
     fn fromBytesInternal(
         alloc: Allocator,
         nbytes: []const u8,
@@ -1014,6 +1022,18 @@ pub const KeyPair = struct {
         return st.finalize();
     }
 
+    /// Sign a pre-hashed message using the key pair.
+    /// The message must have already been hashed using the scheme's hash function.
+    pub fn signPkcs1v15Prehashed(
+        self: Self,
+        alloc: Allocator,
+        comptime Hash: type,
+        msg_hash: [Hash.digest_length]u8,
+    ) !PKCS1v15(Hash).Signature {
+        var st = try self.signerPkcs1v15(alloc, Hash);
+        return st.finalizePrehashed(msg_hash);
+    }
+
     pub fn signerPkcs1v15(self: Self, alloc: Allocator, comptime Hash: type) !PKCS1v15(Hash).Signer {
         return PKCS1v15(Hash).Signer.init(alloc, self.secret_key);
     }
@@ -1031,8 +1051,28 @@ pub const KeyPair = struct {
         return st.finalize();
     }
 
+    /// Sign a pre-hashed message using the key pair.
+    /// The message must have already been hashed using the scheme's hash function.
+    pub fn signPssPrehashed(
+        self: Self,
+        alloc: Allocator,
+        random: Random,
+        comptime Hash: type,
+        msg_hash: [Hash.digest_length]u8,
+        opts: PSSOptions,
+    ) !Pss(Hash).Signature {
+        var st = try self.signerPss(alloc, random, Hash, opts);
+        return st.finalizePrehashed(msg_hash);
+    }
+
     /// Salt must outlive returned `PSS.Signer`.
-    pub fn signerPss(self: Self, alloc: Allocator, random: Random, comptime Hash: type, opts: PSSOptions) !Pss(Hash).Signer {
+    pub fn signerPss(
+        self: Self,
+        alloc: Allocator,
+        random: Random,
+        comptime Hash: type,
+        opts: PSSOptions,
+    ) !Pss(Hash).Signer {
         return Pss(Hash).Signer.init(alloc, random, self.secret_key, opts);
     }
 };
@@ -1074,6 +1114,13 @@ pub fn PKCS1v15(comptime Hash: type) type {
                 return st.verify();
             }
 
+            /// Verify the signature against a pre-hashed message and public key.
+            /// The message must have already been hashed using the scheme's hash function.
+            pub fn verifyPrehashed(self: Self, msg_hash: [Hash.digest_length]u8, public_key: PublicKey) !void {
+                var st = try self.verifier(public_key);
+                return st.verifyPrehashed(msg_hash);
+            }
+
             /// Return the raw signature bytes.
             pub fn toBytes(self: Self) []u8 {
                 return self.bytes;
@@ -1106,21 +1153,25 @@ pub fn PKCS1v15(comptime Hash: type) type {
                 self.h.update(data);
             }
 
-            pub fn finalize(self: *Self) !PkcsT.Signature {
+            fn finalizePrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !PkcsT.Signature {
                 const k = utils.byteLen(self.secret_key.public_key.n.bits());
 
-                var hash: [Hash.digest_length]u8 = undefined;
-                self.h.final(&hash);
-
                 const buf = try self.alloc.alloc(u8, k);
-                const em = try PkcsT.emsaEncode(hash, buf);
+                const em = try PkcsT.emsaEncode(msg_hash, buf);
 
                 try self.secret_key.decrypt(em, em);
 
-                const out = try self.alloc.dupe(u8, em);
+                const sig = try self.alloc.dupe(u8, em);
                 defer self.alloc.free(buf);
 
-                const sig = PkcsT.Signature.fromBytes(out);
+                const siged = PkcsT.Signature.fromBytes(sig);
+                return siged;
+            }
+
+            pub fn finalize(self: *Self) !PkcsT.Signature {
+                var hashed: [Hash.digest_length]u8 = undefined;
+                self.h.final(&hashed);
+                const sig = self.finalizePrehashed(hashed);
                 return sig;
             }
         };
@@ -1144,7 +1195,7 @@ pub fn PKCS1v15(comptime Hash: type) type {
                 self.h.update(data);
             }
 
-            pub fn verify(self: *Self) !void {
+            fn verifyPrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !void {
                 const pk = self.public_key;
                 const s = try Fe.fromBytes(pk.n, self.sig, .big);
                 const emm = try pk.n.powPublic(s, pk.e);
@@ -1153,16 +1204,19 @@ pub fn PKCS1v15(comptime Hash: type) type {
                 const em = em_buf[0..utils.byteLen(pk.n.bits())];
                 try emm.toBytes(em, .big);
 
-                var hash: [Hash.digest_length]u8 = undefined;
-                self.h.final(&hash);
-
                 var em_buf2: [max_modulus_len]u8 = undefined;
                 const em2 = em_buf2[0..utils.byteLen(pk.n.bits())];
-                const expected = try PkcsT.emsaEncode(hash, em2);
+                const expected = try PkcsT.emsaEncode(msg_hash, em2);
 
                 if (!std.mem.eql(u8, expected, em)) {
                     return error.Inconsistent;
                 }
+            }
+
+            pub fn verify(self: *Self) !void {
+                var hashed: [Hash.digest_length]u8 = undefined;
+                self.h.final(&hashed);
+                return self.verifyPrehashed(hashed);
             }
         };
 
@@ -1277,14 +1331,21 @@ pub fn Pss(comptime Hash: type) type {
                 alloc.free(self.bytes);
             }
 
-            pub fn verifier(self: Self, public_key: PublicKey) !PssT.Verifier {
-                return Verifier.init(self, public_key);
+            pub fn verifier(self: Self, public_key: PublicKey, opts: PSSOptions) !PssT.Verifier {
+                return Verifier.init(self, public_key, opts);
             }
 
             pub fn verify(self: Self, msg: []const u8, public_key: PublicKey, opts: PSSOptions) !void {
                 var st = Verifier.init(self, public_key, opts);
                 st.update(msg);
                 return st.verify();
+            }
+
+            /// Verify the signature against a pre-hashed message and public key.
+            /// The message must have already been hashed using the scheme's hash function.
+            pub fn verifyPrehashed(self: Self, msg_hash: [Hash.digest_length]u8, public_key: PublicKey, opts: PSSOptions) !void {
+                var st = try self.verifier(public_key, opts);
+                return st.verifyPrehashed(msg_hash);
             }
 
             /// Return the raw signature bytes.
@@ -1323,11 +1384,8 @@ pub fn Pss(comptime Hash: type) type {
                 self.h.update(data);
             }
 
-            pub fn finalize(self: *Self) !PssT.Signature {
+            fn finalizePrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !PssT.Signature {
                 const digest_size = Hash.digest_length;
-
-                var hashed: [digest_size]u8 = undefined;
-                self.h.final(&hashed);
 
                 // RFC 4055 S3.1
                 const salt = if (self.opts.salt) |s| brk1: {
@@ -1358,17 +1416,24 @@ pub fn Pss(comptime Hash: type) type {
                 const buf = try self.alloc.alloc(u8, max_modulus_len);
 
                 const em_bits = self.secret_key.public_key.n.bits() - 1;
-                const em = try PssT.emsaPSSEncode(hashed, salt, em_bits, buf);
+                const em = try PssT.emsaPSSEncode(msg_hash, salt, em_bits, buf);
 
                 defer self.alloc.free(salt);
 
                 try self.secret_key.decrypt(em, em);
 
-                const out = try self.alloc.dupe(u8, em);
+                const sig = try self.alloc.dupe(u8, em);
                 defer self.alloc.free(buf);
 
-                const sig = PssT.Signature.fromBytes(out);
+                const siged = PssT.Signature.fromBytes(sig);
+                return siged;
+            }
 
+            pub fn finalize(self: *Self) !PssT.Signature {
+                var hashed: [Hash.digest_length]u8 = undefined;
+                self.h.final(&hashed);
+
+                const sig = try self.finalizePrehashed(hashed);
                 return sig;
             }
         };
@@ -1406,7 +1471,7 @@ pub fn Pss(comptime Hash: type) type {
                 self.h.update(data);
             }
 
-            pub fn verify(self: *Self) !void {
+            fn verifyPrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !void {
                 const pk = self.public_key;
 
                 var em_buf: [max_modulus_len]u8 = undefined;
@@ -1418,11 +1483,14 @@ pub fn Pss(comptime Hash: type) type {
                 const emm = try pk.n.powPublic(s, pk.e);
                 try emm.toBytes(em, .big);
 
-                var mHash: [Hash.digest_length]u8 = undefined;
-                self.h.final(&mHash);
-
                 const mod_bits = self.public_key.n.bits();
-                try PssT.emsaPSSVerify(&mHash, em, mod_bits - 1, self.salt_len);
+                try PssT.emsaPSSVerify(&msg_hash, em, mod_bits - 1, self.salt_len);
+            }
+
+            pub fn verify(self: *Self) !void {
+                var hashed: [Hash.digest_length]u8 = undefined;
+                self.h.final(&hashed);
+                try self.verifyPrehashed(hashed);
             }
         };
 
