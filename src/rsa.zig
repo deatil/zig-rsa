@@ -1216,7 +1216,7 @@ pub fn PKCS1v15(comptime Hash: type) type {
             pub fn verify(self: *Self) !void {
                 var hashed: [Hash.digest_length]u8 = undefined;
                 self.h.final(&hashed);
-                return self.verifyPrehashed(hashed);
+                try self.verifyPrehashed(hashed);
             }
         };
 
