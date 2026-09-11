@@ -153,6 +153,7 @@ pub const Parser = struct {
             if (self.view(elem)[0] == 0) elem.slice.start += 1;
             if (elem.slice.len() > 0 and self.view(elem)[0] == 0) return error.InvalidIntegerEncoding;
         }
+
         return elem;
     }
 
@@ -309,6 +310,11 @@ pub const Identifier = packed struct(u8) {
         _,
     };
 };
+
+// pub const IEncoder = interface {
+//    fn tag() Identifier
+//    fn payload() []const u8
+// }
 
 pub const BitString = struct {
     bytes: []const u8,

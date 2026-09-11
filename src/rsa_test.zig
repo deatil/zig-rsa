@@ -309,13 +309,6 @@ test "SecretKey precompute" {
     try testing.expectFmt("5c0d17c57f25976f93a0e2c9b1a3533af341f61f54739a8ae57e70fbb1bb3bdf7c04dd8f0bf316a7c1fed9f56aa5780d10da4d5edb64466d61935772721f3a12e9df74fbaab17f9ab38e280b22461475419d6a66df7796430f58a8035123ea422733f4f08e562b7a2c9cf8b0b2177e851e78ca381f621045348ec1f793e61109", "{x}", .{new_dpbuf});
     try testing.expectFmt("73152cfb875facdf861cafc4afc6c3815b1ca61b9cda0ac51b3ec2f4e1a0a02d27021dbf49f84f3a6956db5457609586b921dec33d32fad62c6197b5998ee8eca5e5d91926e6ab429c9dc91b98382a90b10288e256d8d1cffe3d0c7009032cbe2dcac17c4cb0cef20beebf3342f9643a76b3b64e1af2a4b55943eaf278120f9b", "{x}", .{new_dqbuf});
     try testing.expectFmt("467186a6b4815bc7406ffb39debd2968f87893f6f24ab5dd184a6b2f093a8374bcf9aca57268d4763708ab87446f803f9efd76771d52738cbdf5ceb6474ce2f934fa158048143333dc7355cced09afa4a00ba08d568b4bd03ef6e428a84795353724c71d12d9b61ebd1cbb8464265094f2426de3d731144798e975b2fcdc56ea", "{x}", .{new_qinvbuf});
-
-    // var pub_key = pri_key.public_key;
-    // const pub_key_der = try pub_key.makeDer(alloc);
-    // defer alloc.free(pub_key_der);
-
-    // const pri_key2 = try rsa.SecretKey.fromDer(alloc, pub_key_der);
-    // try std.testing.expectEqual(8, pri_key2.len);
 }
 
 test "SecretKey validate" {
@@ -1340,4 +1333,46 @@ test "SecretKey from der with precompute" {
 
         _ = try rsa.PublicKey.fromBytes(n, e);
     }
+}
+
+test "PublicKey toDer" {
+    const need_run = false;
+
+    if (need_run) {
+        try test_pubkey_toder();
+        try test_prikey_toder();
+    }
+}
+
+fn test_pubkey_toder() !void {
+    const alloc = testing.allocator;
+
+    const pubkey = "3082010a0282010100c04c85907cca38794d7f6893f60b5ef98a940a7c0b730571a71c46e5971759c3d7070962e09db8b0fcaa007b06118ea332934e6a88694ba9c420f524d226979a2542656a491404190a8d7a0199ed51fbb88659ba9348f2af5c099e535951a96112cc1f6cb8ded3dd75ab4a1acefbace65fd4b697c8a3d2ac941964833b5acb18b073562e9f95e0e2edb0f57644b55c0d12d1d79668e274c31858617f8c13e84b1e71080fc026c1a67b2fd211a569bbbba98fe759eba669017eec17e3bb372086abf965a3392e71377f24cd4ff7ad75925ccf59e9697d7f063a164caf5a2069fb896aa5394314497e30659e509e474a88e5d0eae5eec08ce6458a226765eb64f50203010001";
+
+    const pubkey_bytes = try hexDecode(alloc, pubkey);
+    defer alloc.free(pubkey_bytes);
+
+    var pub_key = try rsa.PublicKey.fromDer(pubkey_bytes);
+
+    const pub_key_der = try pub_key.toDer(alloc);
+    defer alloc.free(pub_key_der);
+
+    try testing.expectFmt(pubkey, "{x}", .{pub_key_der});
+}
+
+fn test_prikey_toder() !void {
+    const alloc = testing.allocator;
+
+    const prikey = "308204a50201000282010100c04c85907cca38794d7f6893f60b5ef98a940a7c0b730571a71c46e5971759c3d7070962e09db8b0fcaa007b06118ea332934e6a88694ba9c420f524d226979a2542656a491404190a8d7a0199ed51fbb88659ba9348f2af5c099e535951a96112cc1f6cb8ded3dd75ab4a1acefbace65fd4b697c8a3d2ac941964833b5acb18b073562e9f95e0e2edb0f57644b55c0d12d1d79668e274c31858617f8c13e84b1e71080fc026c1a67b2fd211a569bbbba98fe759eba669017eec17e3bb372086abf965a3392e71377f24cd4ff7ad75925ccf59e9697d7f063a164caf5a2069fb896aa5394314497e30659e509e474a88e5d0eae5eec08ce6458a226765eb64f5020301000102820101009c8a2e786e7d97f77754ee66f476513c46c938b7be02463e3cd1520d782fb40d2eb035bdde27c6bf9d0f2f10f6e1b801b61c204bacfc3a71da8d11c285a890e514cbb60f0daa53a3a6e98096691dbe0d722b3c441bbdd88154252853a5744ab4113f459d95e91f033ad4d3a07b3a7987981f6afca88263efc527dea0cde29d4cf18fa94673fad21dd479d024e1130fce43d587dc9b8ae60a3c7ce03d358ee1bdcef9cc5ee193ca5fa31e66744f2b3dbb64664c22ba1b480c36c860bf14e983f9833ff1cecfefb48375ac32ead071ce7fe741d9f4e35b3569f26682db522447b46e3aedbbf5bb0822883888067bb342a0629a93450c5c0b14ab1d3616bd43918102818100c2a21d19a036d890032c5792aae595ebcf98ae535ea4ba411168eda77542ab1dc26956c10d3f52e6ae180dc838403e89d8f8c1899b649435a64c6b9afcec32214db8b7d49fe05f13ae46c3d067c6825efdda2b794513227d3cd692ff738bcfd63a2f98d44d2af3b21bff62446a8d90ce9fb5aa9ded6907f2fd501de200b2e02502818100fcedfda33cff3e9021ec5906faa7bd99f73eabdb717805d1da37b470ec1eae3789d917bba27882be15f188caa6def93e0ce3ce55077e1e6d486f7f9091a503973f5ccd7bac21bd7aaaf86d0ff3ba280137d9e42c4415c9fbbdd1f55a3bab5df0ba53a062add7c380aa2cb57e2af20a049163eb92026e41df9b7b2f64202db0910281810090b0939189593c8552d69403a4a8285bb5687bafde9bf71a8826c905c4565b7f3417bb36a8f27a5ea2ed9ed1497ff8fde11e8c421013255afcd5b2e8f53d61c7005061d8df419d6cb412475f96c62c0512122e5f68ca60c95980eaa69cef4302af1ed32e806f7ddada9570280c4e516849b273b413da10dec311dc2536ffc341028180625fe670e13e9d84cdccf16b877e4a7e61eddc4603c21cf15c20a26bf14a959440675195c7417c0896dc54ca0d51583bcc23a692e7d123e07975f475b4502c2f5d93a8d05b48dc3ba3d7f0036e568f4cb9fe6382dc10657926814d1e856ac7a4e3b3b703ea7dab2a9605c1a98ae68d02edd1a1442ef1d769333e1c56a335622102818100a2097789b56052857c3b227a76b4fcba0fa1f585be1121e0ea7cf10ad0370ce2e102a48376dee1cbdca25fa78b3abb10fa5d05ec63a192d63442210e74d2b47eddbbb46b681f4351d8a3994f8692044d0635af2172ff0f761a8a25da8c7313704cde454ae859ca083a8b8561480eff7ae53b380e2ad0b4d0dcb9a2fd1480e823";
+
+    const prikey_bytes = try hexDecode(alloc, prikey);
+    defer alloc.free(prikey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
+    defer pri_key.deinit(alloc);
+
+    const pri_key_der = try pri_key.toDer(alloc);
+    defer alloc.free(pri_key_der);
+
+    try testing.expectFmt(prikey, "{x}", .{pri_key_der});
 }

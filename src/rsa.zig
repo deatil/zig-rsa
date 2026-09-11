@@ -22,17 +22,17 @@ pub const BigInt = std.math.big.int.Managed;
 const oid_rsa_publickey = "1.2.840.113549.1.1.1";
 
 const PrikeyData = struct {
-    version: i32,
-    n: i128,
-    e: i32,
-    d: i128,
-    p: i128,
-    q: i128,
+    version: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    n: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    e: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    d: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    p: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    q: asn1.Opaque(asn1.Tag.universal(.integer, false)),
 };
 
 const PubkeyData = struct {
-    n: i128,
-    e: i32,
+    n: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    e: asn1.Opaque(asn1.Tag.universal(.integer, false)),
 };
 
 // OAEPOptions corresponds to options for OAEP decryption.
@@ -120,13 +120,18 @@ pub const PublicKey = struct {
         return pk;
     }
 
-    pub fn makeDer(self: Self, alloc: Allocator) ![]const u8 {
-        const n = try self.n.v.toPrimitive(i128);
-        const e = try self.e.toPrimitive(i32);
+    pub fn toDer(self: Self, alloc: Allocator) ![]const u8 {
+        var n_buf: [max_modulus_len]u8 = undefined;
+        try self.n.toBytes(&n_buf, .big);
+        const new_n_buf = utils.stripLeadingZeros(&n_buf);
+
+        var e_buf: [max_modulus_len]u8 = undefined;
+        try self.e.toBytes(&e_buf, .big);
+        const new_e_buf = utils.stripLeadingZeros(&e_buf);
 
         const value = PubkeyData{
-            .n = n,
-            .e = e,
+            .n = .{ .bytes = new_n_buf },
+            .e = .{ .bytes = new_e_buf },
         };
 
         const ders = try asn1.der.encode(alloc, value);
@@ -461,6 +466,40 @@ pub const SecretKey = struct {
             .d = d,
             .primes = try alloc.dupe(Fe, primes[0..]),
         };
+    }
+
+    pub fn toDer(self: Self, alloc: Allocator) ![]const u8 {
+        var n_buf: [max_modulus_len]u8 = undefined;
+        try self.public_key.n.toBytes(&n_buf, .big);
+        const new_n_buf = utils.stripLeadingZeros(&n_buf);
+
+        var e_buf: [max_modulus_len]u8 = undefined;
+        try self.public_key.e.toBytes(&e_buf, .big);
+        const new_e_buf = utils.stripLeadingZeros(&e_buf);
+
+        var d_buf: [max_modulus_len]u8 = undefined;
+        try self.d.toBytes(&d_buf, .big);
+        const new_d_buf = utils.stripLeadingZeros(&d_buf);
+
+        var p_buf: [max_modulus_len]u8 = undefined;
+        try self.puprimes[0].toBytes(&p_buf, .big);
+        const new_p_buf = utils.stripLeadingZeros(&p_buf);
+
+        var q_buf: [max_modulus_len]u8 = undefined;
+        try self.primes[1].toBytes(&q_buf, .big);
+        const new_q_buf = utils.stripLeadingZeros(&q_buf);
+
+        const value = PrikeyData{
+            .version = .{ .bytes = []u8{0x00} },
+            .n = .{ .bytes = new_n_buf },
+            .e = .{ .bytes = new_e_buf },
+            .d = .{ .bytes = new_d_buf },
+            .p = .{ .bytes = new_p_buf },
+            .q = .{ .bytes = new_q_buf },
+        };
+
+        const ders = try asn1.der.encode(alloc, value);
+        return ders;
     }
 
     pub fn decryptPkcs1v15(self: Self, alloc: Allocator, ciphertext: []const u8) ![]const u8 {
@@ -1091,9 +1130,11 @@ fn checkRSAPublickeyOid(oid: []const u8) !void {
 }
 
 /// Signature Scheme with Appendix v1.5 (RSASSA-PKCS1-v1_5)
-pub fn PKCS1v15(comptime Hash: type) type {
+pub fn PKCS1v15(comptime H: type) type {
     return struct {
         const PkcsT = @This();
+
+        pub const Hash = H;
 
         pub const Signature = struct {
             bytes: []u8,
@@ -1318,9 +1359,11 @@ pub const PSSOptions = struct {
 };
 
 /// Probabilistic Signature Scheme (RSASSA-PSS)
-pub fn Pss(comptime Hash: type) type {
+pub fn Pss(comptime H: type) type {
     return struct {
         const PssT = @This();
+
+        pub const Hash = H;
 
         pub const Signature = struct {
             bytes: []u8,
