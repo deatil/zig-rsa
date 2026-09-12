@@ -75,7 +75,7 @@ pub fn main(init: std.process.Init) !void {
 
     // ==============
 
-    const veri = rsa.verifyPkcs1v15(public_key, Sha256, msg, signature);
+    const veri = rsa.verifyPkcs1v15(alloc, public_key, Sha256, msg, signature);
     var status: bool = true;
     if (veri) |_| {
         status = true;
@@ -108,10 +108,41 @@ signPkcs1v15(
 
 ~~~v
 verifyPkcs1v15(
+    alloc: Allocator,
     public_key: PublicKey,
     comptime Hash: type,
     msg: []const u8,
     sig: []u8,
+) !void
+~~~
+
+PSS sign: 
+~~~v
+pub const PSSOptions = struct {
+    salt_leng: isize = 0,
+    salt: ?[]const u8 = null,
+};
+~~~
+
+~~~v
+pub fn signPss(
+    alloc: Allocator,
+    random: Random,
+    secret_key: SecretKey,
+    comptime Hash: type,
+    msg: []const u8,
+    opts: PSSOptions,
+) ![]u8
+~~~
+
+~~~v
+pub fn verifyPss(
+    alloc: Allocator,
+    public_key: PublicKey,
+    comptime Hash: type,
+    msg: []const u8,
+    sig: []u8,
+    opts: PSSOptions,
 ) !void
 ~~~
 
@@ -149,35 +180,6 @@ decryptOaep(
     ciphertext: []const u8,
     label: []const u8,
 ) ![]const u8
-~~~
-
-PSS sign: 
-~~~v
-pub const PSSOptions = struct {
-    salt_leng: isize = 0,
-    salt: ?[]const u8 = null,
-};
-~~~
-
-~~~v
-pub fn signPss(
-    alloc: Allocator,
-    random: Random,
-    secret_key: SecretKey,
-    comptime Hash: type,
-    msg: []const u8,
-    opts: PSSOptions,
-) ![]u8
-~~~
-
-~~~v
-pub fn verifyPss(
-    public_key: PublicKey,
-    comptime Hash: type,
-    msg: []const u8,
-    sig: []u8,
-    opts: PSSOptions,
-) !void
 ~~~
 
 

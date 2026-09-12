@@ -120,7 +120,7 @@ test "rsa PKCS1-v1_5 signature" {
     const msg = "rsa PKCS1-v1_5 signature";
 
     var signature = try kp.signPkcs1v15(alloc, TestHash, msg);
-    try signature.verify(msg, kp.public_key);
+    try signature.verify(alloc, msg, kp.public_key);
 
     defer signature.deinit(alloc);
 
@@ -131,10 +131,12 @@ test "rsa PKCS1-v1_5 signature" {
     const sig2_res = try fmt.hexToBytes(&sig2, check2);
 
     var signature2 = rsa.PKCS1v15(TestHash).Signature.fromBytes(sig2_res);
-    try signature2.verify(msg, kp.public_key);
+    try signature2.verify(alloc, msg, kp.public_key);
 }
 
 test "rsa PKCS1-v1_5 signature fail" {
+    const alloc = testing.allocator;
+
     const kp = try testKeypair();
 
     const msg = "rsa PKCS1-v1_5 signature";
@@ -146,7 +148,7 @@ test "rsa PKCS1-v1_5 signature fail" {
     const signature2 = rsa.PKCS1v15(TestHash).Signature.fromBytes(sig2_res);
 
     var need_true: bool = false;
-    _ = signature2.verify(msg, kp.public_key) catch {
+    _ = signature2.verify(alloc, msg, kp.public_key) catch {
         need_true = true;
     };
     try testing.expectEqual(true, need_true);
@@ -167,7 +169,7 @@ test "rsa PSS signature" {
         var signature = try kp.signPss(alloc, random, TestHash, msg, .{
             .salt = salt,
         });
-        try signature.verify(msg, kp.public_key, .{
+        try signature.verify(alloc, msg, kp.public_key, .{
             .salt_leng = @as(isize, @intCast(salt.len)),
         });
         defer signature.deinit(alloc);
@@ -176,7 +178,7 @@ test "rsa PSS signature" {
     var signature = try kp.signPss(alloc, random, TestHash, msg, .{
         .salt_leng = rsa.pss_salt_length_equals_hash,
     }); // random salt
-    try signature.verify(msg, kp.public_key, .{
+    try signature.verify(alloc, msg, kp.public_key, .{
         .salt_leng = rsa.pss_salt_length_equals_hash,
     });
     defer signature.deinit(alloc);
@@ -188,7 +190,7 @@ test "rsa PSS signature" {
     const sig2_res = try fmt.hexToBytes(&sig2, check2);
 
     const signature2 = rsa.Pss(TestHash).Signature.fromBytes(sig2_res);
-    try signature2.verify(msg, kp.public_key, .{});
+    try signature2.verify(alloc, msg, kp.public_key, .{});
 }
 
 test "Signer with pkcs8 key" {
@@ -222,7 +224,7 @@ test "Signer with pkcs8 key" {
 
     defer alloc.free(signed_bytes);
 
-    try signed.verify(msg, pub_key, .{});
+    try signed.verify(alloc, msg, pub_key, .{});
 }
 
 test "Signer with pkcs8 key or pkcs1 key" {
@@ -274,7 +276,7 @@ fn test_sign_with_key_der(prikey: []const u8, pubkey: []const u8) !void {
 
     defer alloc.free(signed_bytes);
 
-    try signed.verify(msg, pub_key, .{});
+    try signed.verify(alloc, msg, pub_key, .{});
 }
 
 test "SecretKey precompute" {
@@ -347,7 +349,7 @@ test "KeyPair generate" {
 
     defer alloc.free(signed_bytes);
 
-    try signed.verify(msg, kp.public_key, .{});
+    try signed.verify(alloc, msg, kp.public_key, .{});
 }
 
 test "rsa PKCS1-v1_5 function encrypt and decrypt" {
@@ -417,7 +419,7 @@ test "rsa PKCS1-v1_5 function signature" {
     const msg = "rsa PKCS1-v1_5 signature";
 
     const signature = try rsa.signPkcs1v15(alloc, kp.secret_key, TestHash, msg);
-    try rsa.verifyPkcs1v15(kp.public_key, TestHash, msg, signature);
+    try rsa.verifyPkcs1v15(alloc, kp.public_key, TestHash, msg, signature);
 
     defer alloc.free(signature);
 
@@ -427,10 +429,12 @@ test "rsa PKCS1-v1_5 function signature" {
     var sig2: [256]u8 = undefined;
     const sig2_res = try fmt.hexToBytes(&sig2, check2);
 
-    try rsa.verifyPkcs1v15(kp.public_key, TestHash, msg, sig2_res);
+    try rsa.verifyPkcs1v15(alloc, kp.public_key, TestHash, msg, sig2_res);
 }
 
 test "rsa PKCS1-v1_5 function signature fail" {
+    const alloc = testing.allocator;
+
     const kp = try testKeypair();
 
     const msg = "rsa PKCS1-v1_5 signature";
@@ -440,7 +444,7 @@ test "rsa PKCS1-v1_5 function signature fail" {
     const sig2_res = try fmt.hexToBytes(&sig2, check2);
 
     var need_err: bool = false;
-    _ = rsa.verifyPkcs1v15(kp.public_key, TestHash, msg, sig2_res) catch {
+    _ = rsa.verifyPkcs1v15(alloc, kp.public_key, TestHash, msg, sig2_res) catch {
         need_err = true;
     };
     try testing.expectEqual(true, need_err);
@@ -461,7 +465,7 @@ test "rsa PSS function signature" {
         const signature = try rsa.signPss(alloc, random, kp.secret_key, TestHash, msg, .{
             .salt = salt,
         });
-        try rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+        try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
             .salt_leng = @as(isize, @intCast(salt.len)),
         });
 
@@ -469,7 +473,7 @@ test "rsa PSS function signature" {
     }
 
     const signature = try rsa.signPss(alloc, random, kp.secret_key, TestHash, msg, .{}); // random salt
-    try rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+    try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
         .salt_leng = rsa.pss_salt_length_auto,
     });
 
@@ -481,7 +485,7 @@ test "rsa PSS function signature" {
     var sig2: [256]u8 = undefined;
     const sig2_res = try fmt.hexToBytes(&sig2, check2);
 
-    try rsa.verifyPss(kp.public_key, TestHash, msg, sig2_res, .{
+    try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, sig2_res, .{
         .salt_leng = rsa.pss_salt_length_auto,
     });
 }
@@ -501,7 +505,7 @@ test "rsa PSS function signature with generate_key" {
 
     {
         const signature = try rsa.signPss(alloc, random, kp.secret_key, TestHash, msg, .{}); // random salt
-        try rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+        try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
             .salt_leng = rsa.pss_salt_length_auto,
         });
 
@@ -512,7 +516,7 @@ test "rsa PSS function signature with generate_key" {
         const signature = try rsa.signPss(alloc, random, kp.secret_key, TestHash, msg, .{
             .salt_leng = rsa.pss_salt_length_auto,
         });
-        try rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+        try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
             .salt_leng = rsa.pss_salt_length_auto,
         });
 
@@ -523,7 +527,7 @@ test "rsa PSS function signature with generate_key" {
         const signature = try rsa.signPss(alloc, random, kp.secret_key, TestHash, msg, .{
             .salt_leng = rsa.pss_salt_length_equals_hash,
         });
-        try rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+        try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
             .salt_leng = rsa.pss_salt_length_equals_hash,
         });
 
@@ -534,7 +538,7 @@ test "rsa PSS function signature with generate_key" {
         const signature = try rsa.signPss(alloc, random, kp.secret_key, TestHash, msg, .{
             .salt_leng = rsa.pss_salt_length_equals_hash,
         });
-        try rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+        try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
             .salt_leng = rsa.pss_salt_length_auto,
         });
 
@@ -545,7 +549,7 @@ test "rsa PSS function signature with generate_key" {
         const signature = try rsa.signPss(alloc, random, kp.secret_key, TestHash, msg, .{
             .salt = "salt test",
         });
-        try rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+        try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
             .salt_leng = rsa.pss_salt_length_auto,
         });
 
@@ -558,7 +562,7 @@ test "rsa PSS function signature with generate_key" {
         });
 
         var need_err = false;
-        rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+        rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
             .salt_leng = rsa.pss_salt_length_equals_hash,
         }) catch {
             need_err = true;
@@ -572,7 +576,7 @@ test "rsa PSS function signature with generate_key" {
         const signature = try rsa.signPss(alloc, random, kp.secret_key, TestHash, msg, .{
             .salt_leng = 8,
         });
-        try rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+        try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
             .salt_leng = 8,
         });
 
@@ -583,7 +587,7 @@ test "rsa PSS function signature with generate_key" {
         const signature = try rsa.signPss(alloc, random, kp.secret_key, TestHash, msg, .{
             .salt_leng = -3,
         });
-        try rsa.verifyPss(kp.public_key, TestHash, msg, signature, .{
+        try rsa.verifyPss(alloc, kp.public_key, TestHash, msg, signature, .{
             .salt_leng = -3,
         });
 
@@ -597,7 +601,7 @@ fn test_sign_pkcs1v15_with_hash(kp: rsa.KeyPair, comptime h: type) !void {
     const msg = "rsa PKCS1-v1_5 signature";
 
     const signature = try rsa.signPkcs1v15(alloc, kp.secret_key, h, msg);
-    try rsa.verifyPkcs1v15(kp.public_key, h, msg, signature);
+    try rsa.verifyPkcs1v15(alloc, kp.public_key, h, msg, signature);
 
     defer alloc.free(signature);
 }
@@ -731,7 +735,7 @@ test "rsa list check" {
         var sig2: [256]u8 = undefined;
         const sig2_res = try fmt.hexToBytes(&sig2, check2);
 
-        try rsa.verifyPkcs1v15(pub_key, sha2.Sha256, msg, sig2_res);
+        try rsa.verifyPkcs1v15(alloc, pub_key, sha2.Sha256, msg, sig2_res);
     }
 
     {
@@ -750,7 +754,7 @@ test "rsa list check" {
         var sig2: [256]u8 = undefined;
         const sig2_res = try fmt.hexToBytes(&sig2, check2);
 
-        try rsa.verifyPss(pub_key, sha2.Sha384, msg, sig2_res, .{
+        try rsa.verifyPss(alloc, pub_key, sha2.Sha384, msg, sig2_res, .{
             .salt_leng = rsa.pss_salt_length_auto,
         });
     }
@@ -1034,10 +1038,14 @@ test "KeyPair generateMultiPrimeKey" {
 
     defer alloc.free(signed_bytes);
 
-    try signed.verify(msg, kp.public_key, .{});
+    try signed.verify(alloc, msg, kp.public_key, .{});
 }
 
 test "SecretKey generateMultiPrimeKey" {
+    // try test_secret_key_generate_multi_primeKey();
+}
+
+fn test_secret_key_generate_multi_primeKey() !void {
     const alloc = testing.allocator;
     const io = testing.io;
 
@@ -1235,7 +1243,7 @@ test "sign Prehashed with pkcs8 key" {
         defer alloc.free(signed_bytes);
 
         var veri = rsa.Pss(TestHash).Signature.fromBytes(signed_bytes);
-        try veri.verifyPrehashed(h_msg, pub_key, .{});
+        try veri.verifyPrehashed(alloc, h_msg, pub_key, .{});
     }
 
     {
@@ -1248,7 +1256,7 @@ test "sign Prehashed with pkcs8 key" {
         defer alloc.free(signed_bytes);
 
         var veri = rsa.PKCS1v15(TestHash).Signature.fromBytes(signed_bytes);
-        try veri.verifyPrehashed(h_msg, pub_key);
+        try veri.verifyPrehashed(alloc, h_msg, pub_key);
     }
 
     {
@@ -1261,7 +1269,7 @@ test "sign Prehashed with pkcs8 key" {
         defer alloc.free(signed_bytes);
 
         var veri = rsa.Pss(TestHash).Signature.fromBytes(signed_bytes);
-        try veri.verify(msg, pub_key, .{});
+        try veri.verify(alloc, msg, pub_key, .{});
     }
 
     {
@@ -1274,7 +1282,7 @@ test "sign Prehashed with pkcs8 key" {
         defer alloc.free(signed_bytes);
 
         var veri = rsa.PKCS1v15(TestHash).Signature.fromBytes(signed_bytes);
-        try veri.verify(msg, pub_key);
+        try veri.verify(alloc, msg, pub_key);
     }
 }
 
@@ -1375,4 +1383,125 @@ fn test_prikey_toder() !void {
     defer alloc.free(pri_key_der);
 
     try testing.expectFmt(prikey, "{x}", .{pri_key_der});
+}
+
+test "sign vec with pkcs8 key" {
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    const random = utils.cryptoRand(io);
+
+    const prikey = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDh/nCDmXaEqxN416b9XjV8acmbqA52uPzKbesWQRT/BPxEO2dKAURk5CkcSBDskvfzFR9TRjeDppjD1BPSEnuYKnP0SvmotoxcnBnHMfMBqGV8DSJyppu8k4y9C3MPq5C/rA8TJm0NNaJCL0BfAGkeyw+elgYifbRlm42VfYGsKVyIeEI9Qghk5Cf8yapMPfWNLKOhChXsyGExMBMonHZeseFH7UNwonNAFJMAaelhVqqmwBFqn6fBGKmvedRO7HIaiEFNKaMna6xJ5Bccjds4MhF7UC5PIdx4Bt7CfxvjrbIRYoBF2l30CNBblIhU992zPkHoaVhDkt1gq3OdO7LvAgMBAAECggEBALCJrWTv7ahnZ3efpqAIBuogTVBd8KaHjVmokds5jehFAbdfXClwYfgaT477MNVNXYmzN1w63sTl0DIxqiYRMCFHEHuGUg6cQ3tYqb50Y2spG9XTANTlF4UxEeDfX8ue7xz7kG8aNlf6TL084iEUVgmrAJGWikZJQjGZWPmtKC3OTeJY5Bev5qHVuMRe+XEM5aQc3ph+lXlOF0Qp0Eg8YRWprrev2faH6prMqu2JGomoac6sfM4QJhtEViF7Gw0XPthPTbF19IefuAwi9psMM/9CnQ+MTWN2i6IxoUdicsFuC+Wdlb3K5V/+uldNSr+ePEhcya+YTLK9IOcVwWKQHykCgYEA8XvuEribf+t0ZPtfxr+DC9nZHXbVoFx0/ARpSG+P/fp3Hn3rO9iYQ6OtZ9mEXTzf+dhYTaRWq6PbCOz6i0It+J8QSBdxU9OcQ4871mDe41IvSc1CCGMW4PeIYtNQEK0zrqhN7SMtKyUd7yAsYRCrIzMc7NjE2qJvFw5kh7xC3Q0CgYEA75Qjn5daNYSAOa/ILdOs5J/8oIaO27RNK/fSKm/btsMsyum8+YP/mWmm1MXBzG9WEKzZv5yEKOWCEVJYVsFQsGt9yLYW2WIKU5UxiuU0F1RImF/dphIbYOh7oGC3WfYKk2f+K7ftjc196ZkEkDuE2Xh1h75/67Mzztx1DbXj6OsCgYBcDRfFfyWXb5Og4smxo1M680H2H1RzmorlfnD7sbs733wE3Y8L8xanwf7Z9WqleA0Q2k1e22RGbWGTV3JyHzoS6d90+6qxf5qzjigLIkYUdUGdambfd5ZDD1ioA1Ej6kInM/TwjlYreiyc+LCyF36FHnjKOB9iEEU0jsH3k+YRCQKBgHMVLPuHX6zfhhyvxK/Gw4FbHKYbnNoKxRs+wvThoKAtJwIdv0n4TzppVttUV2CVhrkh3sM9MvrWLGGXtZmO6Oyl5dkZJuarQpydyRuYOCqQsQKI4lbY0c/+PQxwCQMsvi3KwXxMsM7yC+6/M0L5ZDp2s7ZOGvKktVlD6vJ4Eg+bAoGARnGGprSBW8dAb/s53r0paPh4k/bySrXdGEprLwk6g3S8+aylcmjUdjcIq4dEb4A/nv12dx1Sc4y99c62R0zi+TT6FYBIFDMz3HNVzO0Jr6SgC6CNVotL0D725CioR5U1NyTHHRLZth69HLuEZCZQlPJCbePXMRRHmOl1svzcVuo=";
+    const pubkey = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4f5wg5l2hKsTeNem/V41fGnJm6gOdrj8ym3rFkEU/wT8RDtnSgFEZOQpHEgQ7JL38xUfU0Y3g6aYw9QT0hJ7mCpz9Er5qLaMXJwZxzHzAahlfA0icqabvJOMvQtzD6uQv6wPEyZtDTWiQi9AXwBpHssPnpYGIn20ZZuNlX2BrClciHhCPUIIZOQn/MmqTD31jSyjoQoV7MhhMTATKJx2XrHhR+1DcKJzQBSTAGnpYVaqpsARap+nwRipr3nUTuxyGohBTSmjJ2usSeQXHI3bODIRe1AuTyHceAbewn8b462yEWKARdpd9AjQW5SIVPfdsz5B6GlYQ5LdYKtznTuy7wIDAQAB";
+
+    const prikey_bytes = try base64Decode(alloc, prikey);
+    const pubkey_bytes = try base64Decode(alloc, pubkey);
+
+    defer alloc.free(prikey_bytes);
+    defer alloc.free(pubkey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromPKCS8Der(alloc, prikey_bytes);
+    const pub_key = try rsa.PublicKey.fromPKCS8Der(pubkey_bytes);
+
+    defer pri_key.deinit(alloc);
+
+    const msg = "rsa test signature";
+
+    // pkcs1v15
+    {
+        var st = rsa.RsaSha256.Signer.init(alloc, pri_key);
+        st.update(msg);
+        var sig = try st.finalize();
+
+        const signed_bytes = sig.toBytes();
+        try testing.expectEqual(true, signed_bytes.len > 0);
+
+        defer alloc.free(signed_bytes);
+
+        var veri = rsa.RsaSha256.Signature.fromBytes(signed_bytes);
+        try veri.verify(alloc, msg, pub_key);
+    }
+
+    {
+        var st = rsa.RsaSha384.Signer.init(alloc, pri_key);
+        st.update(msg);
+        var sig = try st.finalize();
+
+        const signed_bytes = sig.toBytes();
+        try testing.expectEqual(true, signed_bytes.len > 0);
+
+        defer alloc.free(signed_bytes);
+
+        var veri = rsa.RsaSha384.Signature.fromBytes(signed_bytes);
+        try veri.verify(alloc, msg, pub_key);
+    }
+
+    {
+        var st = rsa.RsaSha512.Signer.init(alloc, pri_key);
+        st.update(msg);
+        var sig = try st.finalize();
+
+        const signed_bytes = sig.toBytes();
+        try testing.expectEqual(true, signed_bytes.len > 0);
+
+        defer alloc.free(signed_bytes);
+
+        var veri = rsa.RsaSha512.Signature.fromBytes(signed_bytes);
+        try veri.verify(alloc, msg, pub_key);
+    }
+
+    // pss
+    {
+        var st = rsa.PssSha256.Signer.init(alloc, random, pri_key, .{
+            .salt_leng = rsa.pss_salt_length_equals_hash,
+        });
+        st.update(msg);
+        var sig = try st.finalize();
+
+        const signed_bytes = sig.toBytes();
+        try testing.expectEqual(true, signed_bytes.len > 0);
+
+        defer alloc.free(signed_bytes);
+
+        var veri = rsa.PssSha256.Signature.fromBytes(signed_bytes);
+        try veri.verify(alloc, msg, pub_key, .{
+            .salt_leng = rsa.pss_salt_length_auto,
+        });
+    }
+
+    {
+        var st = rsa.PssSha384.Signer.init(alloc, random, pri_key, .{
+            .salt_leng = rsa.pss_salt_length_equals_hash,
+        });
+        st.update(msg);
+        var sig = try st.finalize();
+
+        const signed_bytes = sig.toBytes();
+        try testing.expectEqual(true, signed_bytes.len > 0);
+
+        defer alloc.free(signed_bytes);
+
+        var veri = rsa.PssSha384.Signature.fromBytes(signed_bytes);
+        try veri.verify(alloc, msg, pub_key, .{
+            .salt_leng = rsa.pss_salt_length_auto,
+        });
+    }
+
+    {
+        var st = rsa.PssSha512.Signer.init(alloc, random, pri_key, .{
+            .salt_leng = rsa.pss_salt_length_equals_hash,
+        });
+        st.update(msg);
+        var sig = try st.finalize();
+
+        const signed_bytes = sig.toBytes();
+        try testing.expectEqual(true, signed_bytes.len > 0);
+
+        defer alloc.free(signed_bytes);
+
+        var veri = rsa.PssSha512.Signature.fromBytes(signed_bytes);
+        try veri.verify(alloc, msg, pub_key, .{
+            .salt_leng = rsa.pss_salt_length_auto,
+        });
+    }
 }

@@ -3,6 +3,8 @@ const fmt = std.fmt;
 const ff = std.crypto.ff;
 const testing = std.testing;
 const asn1 = std.crypto.codecs.asn1;
+const sha2 = std.crypto.hash.sha2;
+const sha3 = std.crypto.hash.sha3;
 const Random = std.Random;
 const Allocator = std.mem.Allocator;
 
@@ -19,9 +21,16 @@ pub const Fe = Modulus.Fe;
 
 pub const BigInt = std.math.big.int.Managed;
 
-const oid_rsa_publickey = "1.2.840.113549.1.1.1";
+pub const RsaSha256 = PKCS1v15(sha2.Sha256);
+pub const RsaSha384 = PKCS1v15(sha2.Sha384);
+pub const RsaSha512 = PKCS1v15(sha2.Sha512);
 
-const PrikeyData = struct {
+pub const PssSha256 = Pss(sha2.Sha256);
+pub const PssSha384 = Pss(sha2.Sha384);
+pub const PssSha512 = Pss(sha2.Sha512);
+
+// Pkcs1PrivateKey is a structure which mirrors the PKCS #1 ASN.1 for an RSA private key.
+const Pkcs1PrivateKey = struct {
     version: asn1.Opaque(asn1.Tag.universal(.integer, false)),
     n: asn1.Opaque(asn1.Tag.universal(.integer, false)),
     e: asn1.Opaque(asn1.Tag.universal(.integer, false)),
@@ -30,7 +39,8 @@ const PrikeyData = struct {
     q: asn1.Opaque(asn1.Tag.universal(.integer, false)),
 };
 
-const PubkeyData = struct {
+// Pkcs1PublicKey reflects the ASN.1 structure of a PKCS #1 public key.
+const Pkcs1PublicKey = struct {
     n: asn1.Opaque(asn1.Tag.universal(.integer, false)),
     e: asn1.Opaque(asn1.Tag.universal(.integer, false)),
 };
@@ -129,7 +139,7 @@ pub const PublicKey = struct {
         try self.e.toBytes(&e_buf, .big);
         const new_e_buf = utils.stripLeadingZeros(&e_buf);
 
-        const value = PubkeyData{
+        const value = Pkcs1PublicKey{
             .n = .{ .bytes = new_n_buf },
             .e = .{ .bytes = new_e_buf },
         };
@@ -388,7 +398,7 @@ pub const SecretKey = struct {
         try self.primes[1].toBytes(&q_buf, .big);
         const new_q_buf = utils.stripLeadingZeros(&q_buf);
 
-        const value = PrikeyData{
+        const value = Pkcs1PrivateKey{
             .version = .{ .bytes = []u8{0x00} },
             .n = .{ .bytes = new_n_buf },
             .e = .{ .bytes = new_e_buf },
@@ -626,7 +636,7 @@ pub const KeyPair = struct {
             const qb = utils.stripLeadingZeros(q_bytes);
             const eb = utils.stripLeadingZeros(&e_bytes);
 
-            if (pb.len > utils.max_modulus_len or qb.len > utils.max_modulus_len) {
+            if (pb.len > max_modulus_len or qb.len > max_modulus_len) {
                 continue;
             }
             // e must be odd and >= 3 (RFC 8017 §3.1); evenness would also fail the
@@ -904,6 +914,8 @@ pub const KeyPair = struct {
     }
 };
 
+const oid_rsa_publickey = "1.2.840.113549.1.1.1";
+
 fn checkRSAPublickeyOid(oid: []const u8) !void {
     var buf: [256]u8 = undefined;
     var stream: std.Io.Writer = .fixed(&buf);
@@ -921,29 +933,47 @@ pub const Crypt = struct {
     const CryptT = @This();
 
     /// encrypt short plaintext with public key.
-    pub fn encrypt(public_key: PublicKey, m: Fe) !Fe {
+    pub fn encrypt(alloc: Allocator, public_key: PublicKey, plaintext: []const u8) ![]const u8 {
+        const m = try Fe.fromBytes(public_key.n, plaintext, .big);
         const c = try public_key.n.powPublic(m, public_key.e);
-        return c;
+
+        const k = utils.byteLen(public_key.n.bits());
+
+        const out = try alloc.alloc(u8, k);
+        try c.toBytes(out, .big);
+
+        return out;
     }
 
     /// decrypt short ciphertext with secret key.
-    pub fn decrypt(secret_key: SecretKey, c: Fe) !Fe {
+    pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8, need_check: bool) ![]u8 {
         const n = secret_key.public_key.n;
+        const k = utils.byteLen(n.bits());
+
+        const c = try Fe.fromBytes(n, ciphertext, .big);
         const m = try n.pow(c, secret_key.d);
-        return m;
-    }
 
-    pub fn decrypt_and_check(secret_key: SecretKey, c: Fe) !Fe {
-        const m = try CryptT.decrypt(secret_key, c);
+        const out = try alloc.alloc(u8, k);
+        try m.toBytes(out, .big);
 
-        // In order to defend against errors in the CRT computation, m^e is
-        // calculated, which should match the original ciphertext.
-        const check = try encrypt(secret_key.public_key, m);
-        if (!c.eql(check)) {
-            return error.Internalerror;
+        if (need_check) {
+            // In order to defend against errors in the CRT computation, m^e is
+            // calculated, which should match the original ciphertext.
+            const check = try secret_key.public_key.n.powPublic(m, secret_key.public_key.e);
+            if (!c.eql(check)) {
+                return error.Internalerror;
+            }
         }
 
-        return m;
+        return out;
+    }
+
+    pub fn decrypt_without_check(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]u8 {
+        return CryptT.decrypt(alloc, secret_key, ciphertext, false);
+    }
+
+    pub fn decrypt_with_check(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]u8 {
+        return CryptT.decrypt(alloc, secret_key, ciphertext, true);
     }
 
     pub const Pkcs1v15 = struct {
@@ -970,25 +1000,14 @@ pub const Crypt = struct {
             em[em.len - msg.len - 1] = 0;
             @memcpy(em[em.len - msg.len ..][0..msg.len], msg);
 
-            const m = try Fe.fromBytes(public_key.n, em, .big);
-            const e = try CryptT.encrypt(public_key, m);
-
-            const out = try alloc.alloc(u8, k);
-            try e.toBytes(out, .big);
-
+            const out = try CryptT.encrypt(alloc, public_key, em);
             return out;
         }
 
         /// Decrypt a encrtpted message using RSAES-PKCS1-v1_5.
         pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
-            const n = secret_key.public_key.n;
-            const k = utils.byteLen(n.bits());
-
-            const m = try Fe.fromBytes(n, ciphertext, .big);
-            const e = try CryptT.decrypt(secret_key, m);
-
-            const em = try alloc.alloc(u8, k);
-            try e.toBytes(em, .big);
+            const em = try CryptT.decrypt_without_check(alloc, secret_key, ciphertext);
+            defer alloc.free(em);
 
             // Care shall be taken to ensure that an opponent cannot
             // distinguish these error conditions, whether by error
@@ -1000,7 +1019,6 @@ pub const Crypt = struct {
             }
 
             const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
-            defer alloc.free(em);
 
             return out;
         }
@@ -1102,12 +1120,7 @@ pub const Crypt = struct {
             const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
             for (seed, seed_mask) |*v, m| v.* ^= m;
 
-            const m = try Fe.fromBytes(public_key.n, em, .big);
-            const e = try CryptT.encrypt(public_key, m);
-
-            const out = try alloc.alloc(u8, k);
-            try e.toBytes(out, .big);
-
+            const out = try CryptT.encrypt(alloc, public_key, em);
             return out;
         }
 
@@ -1119,17 +1132,10 @@ pub const Crypt = struct {
             ciphertext: []const u8,
             label: []const u8,
         ) ![]u8 {
-            // align variable names with spec
-            const n = secret_key.public_key.n;
-            const k = utils.byteLen(n.bits());
-
             const digest_size = Hash.digest_length;
 
-            const c = try Fe.fromBytes(n, ciphertext, .big);
-            const exp = try CryptT.decrypt(secret_key, c);
-
-            const em = try alloc.alloc(u8, k);
-            try exp.toBytes(em, .big);
+            const em = try CryptT.decrypt_without_check(alloc, secret_key, ciphertext);
+            defer alloc.free(em);
 
             const y = em[0];
             const seed = em[1..][0..digest_size];
@@ -1155,8 +1161,6 @@ pub const Crypt = struct {
             }
 
             const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
-            defer alloc.free(em);
-
             return out;
         }
     };
@@ -1178,20 +1182,20 @@ pub fn PKCS1v15(comptime H: type) type {
                 alloc.free(self.bytes);
             }
 
-            pub fn verifier(self: Self, public_key: PublicKey) !PkcsT.Verifier {
-                return Verifier.init(self, public_key);
+            pub fn verifier(self: Self, alloc: Allocator, public_key: PublicKey) !PkcsT.Verifier {
+                return Verifier.init(alloc, self, public_key);
             }
 
-            pub fn verify(self: Self, msg: []const u8, public_key: PublicKey) !void {
-                var st = Verifier.init(self, public_key);
+            pub fn verify(self: Self, alloc: Allocator, msg: []const u8, public_key: PublicKey) !void {
+                var st = Verifier.init(alloc, self, public_key);
                 st.update(msg);
                 return st.verify();
             }
 
             /// Verify the signature against a pre-hashed message and public key.
             /// The message must have already been hashed using the scheme's hash function.
-            pub fn verifyPrehashed(self: Self, msg_hash: [Hash.digest_length]u8, public_key: PublicKey) !void {
-                var st = try self.verifier(public_key);
+            pub fn verifyPrehashed(self: Self, alloc: Allocator, msg_hash: [Hash.digest_length]u8, public_key: PublicKey) !void {
+                var st = try self.verifier(alloc, public_key);
                 return st.verifyPrehashed(msg_hash);
             }
 
@@ -1240,11 +1244,7 @@ pub fn PKCS1v15(comptime H: type) type {
                     return error.MessageTooLong;
                 }
 
-                const em_int = try Fe.fromBytes(n, em, .big);
-                const sig_int = try Crypt.decrypt_and_check(self.secret_key, em_int);
-
-                const sig = try self.alloc.alloc(u8, k);
-                try sig_int.toBytes(sig, .big);
+                const sig = try Crypt.decrypt_with_check(self.alloc, self.secret_key, em);
 
                 const siged = PkcsT.Signature.fromBytes(sig);
                 return siged;
@@ -1259,14 +1259,16 @@ pub fn PKCS1v15(comptime H: type) type {
         };
 
         pub const Verifier = struct {
+            alloc: Allocator,
             h: Hash,
             sig: []u8,
             public_key: PublicKey,
 
             const Self = @This();
 
-            fn init(sig: PkcsT.Signature, public_key: PublicKey) Self {
+            fn init(alloc: Allocator, sig: PkcsT.Signature, public_key: PublicKey) Self {
                 return Verifier{
+                    .alloc = alloc,
                     .h = Hash.init(.{}),
                     .sig = sig.bytes,
                     .public_key = public_key,
@@ -1280,17 +1282,14 @@ pub fn PKCS1v15(comptime H: type) type {
             fn verifyPrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !void {
                 const pk = self.public_key;
                 const k = utils.byteLen(pk.n.bits());
-                const s = try Fe.fromBytes(pk.n, self.sig, .big);
 
-                const emm = try Crypt.encrypt(pk, s);
+                const em = try Crypt.encrypt(self.alloc, pk, self.sig);
+                defer self.alloc.free(em);
 
-                var em_buf: [max_modulus_len]u8 = undefined;
-                const em = em_buf[0..k];
-                try emm.toBytes(em, .big);
+                const hash_buf = try self.alloc.alloc(u8, k);
+                const expected = try PkcsT.emsaEncode(msg_hash, hash_buf);
 
-                var hash_buf: [max_modulus_len]u8 = undefined;
-                const hashs = hash_buf[0..k];
-                const expected = try PkcsT.emsaEncode(msg_hash, hashs);
+                defer self.alloc.free(hash_buf);
 
                 if (!std.mem.eql(u8, expected, em)) {
                     return error.Inconsistent;
@@ -1326,9 +1325,6 @@ pub fn PKCS1v15(comptime H: type) type {
 
         /// DER encoded header. Sequence of digest algo + digest.
         fn digestHeader() []const u8 {
-            const sha2 = std.crypto.hash.sha2;
-            const sha3 = std.crypto.hash.sha3;
-
             // Section 9.2 Notes 1.
             return switch (Hash) {
                 std.crypto.hash.Md5 => &utils.hexToBytes(
@@ -1417,20 +1413,20 @@ pub fn Pss(comptime H: type) type {
                 alloc.free(self.bytes);
             }
 
-            pub fn verifier(self: Self, public_key: PublicKey, opts: PSSOptions) !PssT.Verifier {
-                return Verifier.init(self, public_key, opts);
+            pub fn verifier(self: Self, alloc: Allocator, public_key: PublicKey, opts: PSSOptions) !PssT.Verifier {
+                return Verifier.init(alloc, self, public_key, opts);
             }
 
-            pub fn verify(self: Self, msg: []const u8, public_key: PublicKey, opts: PSSOptions) !void {
-                var st = Verifier.init(self, public_key, opts);
+            pub fn verify(self: Self, alloc: Allocator, msg: []const u8, public_key: PublicKey, opts: PSSOptions) !void {
+                var st = Verifier.init(alloc, self, public_key, opts);
                 st.update(msg);
                 return st.verify();
             }
 
             /// Verify the signature against a pre-hashed message and public key.
             /// The message must have already been hashed using the scheme's hash function.
-            pub fn verifyPrehashed(self: Self, msg_hash: [Hash.digest_length]u8, public_key: PublicKey, opts: PSSOptions) !void {
-                var st = try self.verifier(public_key, opts);
+            pub fn verifyPrehashed(self: Self, alloc: Allocator, msg_hash: [Hash.digest_length]u8, public_key: PublicKey, opts: PSSOptions) !void {
+                var st = try self.verifier(alloc, public_key, opts);
                 return st.verifyPrehashed(msg_hash);
             }
 
@@ -1514,11 +1510,7 @@ pub fn Pss(comptime H: type) type {
                     return error.MessageTooLong;
                 }
 
-                const em_int = try Fe.fromBytes(n, em, .big);
-                const sig_int = try Crypt.decrypt_and_check(self.secret_key, em_int);
-
-                const sig = try self.alloc.alloc(u8, k);
-                try sig_int.toBytes(sig, .big);
+                const sig = try Crypt.decrypt_with_check(self.alloc, self.secret_key, em);
 
                 const siged = PssT.Signature.fromBytes(sig);
                 return siged;
@@ -1534,6 +1526,7 @@ pub fn Pss(comptime H: type) type {
         };
 
         pub const Verifier = struct {
+            alloc: Allocator,
             h: Hash,
             sig: []u8,
             public_key: PublicKey,
@@ -1541,7 +1534,7 @@ pub fn Pss(comptime H: type) type {
 
             const Self = @This();
 
-            fn init(sig: PssT.Signature, public_key: PublicKey, opts: PSSOptions) Self {
+            fn init(alloc: Allocator, sig: PssT.Signature, public_key: PublicKey, opts: PSSOptions) Self {
                 var salt_len: usize = 0;
                 switch (opts.salt_leng) {
                     pss_salt_length_equals_hash => {
@@ -1554,7 +1547,8 @@ pub fn Pss(comptime H: type) type {
                     },
                 }
 
-                return Verifier{
+                return .{
+                    .alloc = alloc,
                     .h = Hash.init(.{}),
                     .sig = sig.bytes,
                     .public_key = public_key,
@@ -1568,18 +1562,10 @@ pub fn Pss(comptime H: type) type {
 
             fn verifyPrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !void {
                 const pk = self.public_key;
+                const em = try Crypt.encrypt(self.alloc, pk, self.sig);
+                defer self.alloc.free(em);
 
-                var em_buf: [max_modulus_len]u8 = undefined;
-                const em_bits = pk.n.bits() - 1;
-                const em_len = utils.byteLen(em_bits);
-                const em = em_buf[0..em_len];
-
-                const s = try Fe.fromBytes(pk.n, self.sig, .big);
-                const emm = try Crypt.encrypt(pk, s);
-
-                try emm.toBytes(em, .big);
-
-                const mod_bits = self.public_key.n.bits();
+                const mod_bits = pk.n.bits();
                 try PssT.emsaPSSVerify(&msg_hash, em, mod_bits - 1, self.salt_len);
             }
 
@@ -1622,6 +1608,7 @@ pub fn Pss(comptime H: type) type {
             var mgf_buf: [max_modulus_len]u8 = undefined;
             const mgf_len = em_len - digest_size - 1;
             const mgf_out = mgf_buf[0 .. ((mgf_len - 1) / digest_size + 1) * digest_size];
+
             var dbMask = mgf1(Hash, hash, mgf_out);
             dbMask = dbMask[0..mgf_len];
 
@@ -1772,7 +1759,7 @@ pub fn generate_key(alloc: Allocator, random: Random, bits: usize) !KeyPair {
     return KeyPair.generate(alloc, random, bits);
 }
 
-pub fn generateMultiPrimeKey(alloc: Allocator, random: Random, bits: usize, comptime nprimes: usize) !KeyPair {
+pub fn generateMultiPrimeKey(alloc: Allocator, random: Random, bits: usize, nprimes: usize) !KeyPair {
     return KeyPair.generateMultiPrimeKey(alloc, random, bits, nprimes);
 }
 
@@ -1786,7 +1773,11 @@ pub fn encryptPkcs1v15(
     return Crypt.Pkcs1v15.encrypt(alloc, random, public_key, msg);
 }
 
-pub fn decryptPkcs1v15(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
+pub fn decryptPkcs1v15(
+    alloc: Allocator,
+    secret_key: SecretKey,
+    ciphertext: []const u8,
+) ![]const u8 {
     return Crypt.Pkcs1v15.decrypt(alloc, secret_key, ciphertext);
 }
 
@@ -1840,24 +1831,21 @@ pub fn signPkcs1v15(
 ) ![]u8 {
     var st = PKCS1v15(Hash).Signer.init(alloc, secret_key);
     st.update(msg);
-
     const sig = try st.finalize();
-    const siged = sig.toBytes();
 
+    const siged = sig.toBytes();
     return siged;
 }
 
 pub fn verifyPkcs1v15(
+    alloc: Allocator,
     public_key: PublicKey,
     comptime Hash: type,
     msg: []const u8,
     sig: []u8,
 ) !void {
     var sign = PKCS1v15(Hash).Signature.fromBytes(sig);
-    try sign.verify(
-        msg,
-        public_key,
-    );
+    try sign.verify(alloc, msg, public_key);
 }
 
 pub fn signPss(
@@ -1870,14 +1858,14 @@ pub fn signPss(
 ) ![]u8 {
     var st = Pss(Hash).Signer.init(alloc, random, secret_key, opts);
     st.update(msg);
-
     const sig = try st.finalize();
-    const siged = sig.toBytes();
 
+    const siged = sig.toBytes();
     return siged;
 }
 
 pub fn verifyPss(
+    alloc: Allocator,
     public_key: PublicKey,
     comptime Hash: type,
     msg: []const u8,
@@ -1885,11 +1873,7 @@ pub fn verifyPss(
     opts: PSSOptions,
 ) !void {
     var sign = Pss(Hash).Signature.fromBytes(sig);
-    try sign.verify(
-        msg,
-        public_key,
-        opts,
-    );
+    try sign.verify(alloc, msg, public_key, opts);
 }
 
 /// Mask generation function. Currently the only one defined.
@@ -1926,8 +1910,6 @@ fn mgf1(comptime Hash: type, seed: []const u8, out: []u8) []u8 {
 inline fn labelHash(comptime Hash: type, label: []const u8) [Hash.digest_length]u8 {
     if (label.len == 0) {
         // magic constants from NIST
-        const sha2 = std.crypto.hash.sha2;
-
         switch (Hash) {
             std.crypto.hash.Sha1 => return utils.hexToBytes(
                 \\da39a3ee 5e6b4b0d 3255bfef 95601890

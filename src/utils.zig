@@ -2,15 +2,14 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const max_modulus_bits = 4096;
+pub const max_modulus_len = max_modulus_bits / 8;
+pub const min_modulus_bits = 512;
 
 pub const Uint = std.crypto.ff.Uint(max_modulus_bits);
 pub const Modulus = std.crypto.ff.Modulus(max_modulus_bits);
 pub const Fe = Modulus.Fe;
 
 pub const BigInt = std.math.big.int.Managed;
-
-pub const max_modulus_len = max_modulus_bits / 8;
-pub const min_modulus_bits = 512;
 
 pub fn byteLen(bits: usize) usize {
     return std.math.divCeil(usize, bits, 8) catch unreachable;
