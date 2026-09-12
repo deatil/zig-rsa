@@ -138,107 +138,6 @@ pub const PublicKey = struct {
         return ders;
     }
 
-    /// Encrypt a short message using RSAES-PKCS1-v1_5.
-    pub fn encryptPkcs1v15(self: Self, alloc: Allocator, random: Random, msg: []const u8) ![]const u8 {
-        // align variable names with spec
-        const k = utils.byteLen(self.n.bits());
-
-        // EM = 0x00 || 0x02 || PS || 0x00 || M.
-        var em = try alloc.alloc(u8, k);
-        em[0] = 0;
-        em[1] = 2;
-
-        const ps = em[2..][0 .. k - msg.len - 3];
-
-        // Section: 7.2.1
-        // PS consists of pseudo-randomly generated nonzero octets.
-        for (ps) |*v| {
-            v.* = random.uintLessThan(u8, 0xff) + 1;
-        }
-
-        em[em.len - msg.len - 1] = 0;
-        @memcpy(em[em.len - msg.len ..][0..msg.len], msg);
-
-        const m = try Fe.fromBytes(self.n, em, .big);
-        const e = try self.n.powPublic(m, self.e);
-        try e.toBytes(em, .big);
-        return em;
-    }
-
-    /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
-    pub fn encryptOaep(
-        self: Self,
-        alloc: Allocator,
-        random: Random,
-        comptime Hash: type,
-        msg: []const u8,
-        label: []const u8,
-    ) ![]const u8 {
-        return self.encryptOaepInternal(alloc, random, Hash, Hash, msg, label);
-    }
-
-    pub fn encryptOaepWithOptions(
-        self: Self,
-        alloc: Allocator,
-        random: Random,
-        msg: []const u8,
-        opts: OAEPOptions,
-    ) ![]const u8 {
-        if (opts.mgf_hash) |mgf_hash| {
-            return self.encryptOaepInternal(alloc, random, opts.hash, mgf_hash, msg, opts.label);
-        }
-
-        return self.encryptOaepInternal(alloc, random, opts.hash, opts.hash, msg, opts.label);
-    }
-
-    /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
-    fn encryptOaepInternal(
-        self: Self,
-        alloc: Allocator,
-        random: Random,
-        comptime Hash: type,
-        comptime MgfHash: type,
-        msg: []const u8,
-        label: []const u8,
-    ) ![]const u8 {
-        // align variable names with spec
-        const k = utils.byteLen(self.n.bits());
-
-        const digest_size = Hash.digest_length;
-
-        if (msg.len > k - 2 * digest_size - 2) {
-            return error.MessageTooLong;
-        }
-
-        // EM = 0x00 || maskedSeed || maskedDB.
-        var em = try alloc.alloc(u8, k);
-        em[0] = 0;
-        const seed = em[1..][0..digest_size];
-
-        random.bytes(seed);
-
-        // DB = lHash || PS || 0x01 || M.
-        var db = em[1 + seed.len ..];
-        const lHash = labelHash(Hash, label);
-        @memcpy(db[0..lHash.len], &lHash);
-        @memset(db[lHash.len .. db.len - msg.len - 2], 0);
-        db[db.len - msg.len - 1] = 1;
-        @memcpy(db[db.len - msg.len ..], msg);
-
-        var mgf_buf: [max_modulus_len]u8 = undefined;
-
-        const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
-        for (db, db_mask) |*v, m| v.* ^= m;
-
-        const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
-        for (seed, seed_mask) |*v, m| v.* ^= m;
-
-        const m = try Fe.fromBytes(self.n, em, .big);
-        const e = try self.n.powPublic(m, self.e);
-        try e.toBytes(em, .big);
-        return em;
-    }
-
     pub fn check(self: Self) !void {
         if (self.n.v.isZero()) {
             return error.MissingPublicModulus;
@@ -502,113 +401,6 @@ pub const SecretKey = struct {
         return ders;
     }
 
-    pub fn decryptPkcs1v15(self: Self, alloc: Allocator, ciphertext: []const u8) ![]const u8 {
-        const k = utils.byteLen(self.public_key.n.bits());
-
-        const em = try alloc.alloc(u8, k);
-
-        const m = try Fe.fromBytes(self.public_key.n, ciphertext, .big);
-        const e = try self.public_key.n.pow(m, self.d);
-        try e.toBytes(em, .big);
-
-        // Care shall be taken to ensure that an opponent cannot
-        // distinguish these error conditions, whether by error
-        // message or timing.
-        const msg_start = ct.lastIndexOfScalar(em, 0) orelse em.len;
-        const ps_len = em.len - msg_start;
-        if (ct.@"or"(em[0] != 0, ct.@"or"(em[1] != 2, ps_len < 8))) {
-            return error.Inconsistent;
-        }
-
-        const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
-        defer alloc.free(em);
-
-        return out;
-    }
-
-    pub fn decryptOaep(
-        self: Self,
-        alloc: Allocator,
-        comptime Hash: type,
-        ciphertext: []const u8,
-        label: []const u8,
-    ) ![]u8 {
-        return self.decryptOaepInternal(alloc, Hash, Hash, ciphertext, label);
-    }
-
-    pub fn decryptOaepWithOptions(
-        self: Self,
-        alloc: Allocator,
-        ciphertext: []const u8,
-        opts: OAEPOptions,
-    ) ![]u8 {
-        if (opts.mgf_hash) |mgf_hash| {
-            return self.decryptOaepInternal(alloc, opts.hash, mgf_hash, ciphertext, opts.label);
-        }
-
-        return self.decryptOaepInternal(alloc, opts.hash, opts.hash, ciphertext, opts.label);
-    }
-
-    fn decryptOaepInternal(
-        self: Self,
-        alloc: Allocator,
-        comptime Hash: type,
-        comptime MgfHash: type,
-        ciphertext: []const u8,
-        label: []const u8,
-    ) ![]u8 {
-        // align variable names with spec
-        const k = utils.byteLen(self.public_key.n.bits());
-
-        const digest_size = Hash.digest_length;
-
-        const mod = try Fe.fromBytes(self.public_key.n, ciphertext, .big);
-        const exp = self.public_key.n.pow(mod, self.d) catch unreachable;
-        const em = try alloc.alloc(u8, k);
-        try exp.toBytes(em, .big);
-
-        const y = em[0];
-        const seed = em[1..][0..digest_size];
-        const db = em[1 + digest_size ..];
-
-        var mgf_buf: [max_modulus_len]u8 = undefined;
-
-        const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
-        for (seed, seed_mask) |*v, m| v.* ^= m;
-
-        const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
-        for (db, db_mask) |*v, m| v.* ^= m;
-
-        const expected_hash = labelHash(Hash, label);
-        const actual_hash = db[0..expected_hash.len];
-
-        // Care shall be taken to ensure that an opponent cannot
-        // distinguish these error conditions, whether by error
-        // message or timing.
-        const msg_start = ct.indexOfScalarPos(em, expected_hash.len + 1, 1) orelse 0;
-        if (ct.@"or"(y != 0, ct.@"or"(msg_start == 0, !ct.memEql(&expected_hash, actual_hash)))) {
-            return error.Inconsistent;
-        }
-
-        const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
-        defer alloc.free(em);
-
-        return out;
-    }
-
-    /// decrypt short plaintext with secret key.
-    pub fn decrypt(self: Self, plaintext: []const u8, out: []u8) !void {
-        const n = self.public_key.n;
-        const k = utils.byteLen(n.bits());
-        if (plaintext.len > k) {
-            return error.MessageTooLong;
-        }
-
-        const msg_as_int = try Fe.fromBytes(n, plaintext, .big);
-        const enc_as_int = try n.pow(msg_as_int, self.d);
-        try enc_as_int.toBytes(out, .big);
-    }
-
     pub fn validate(self: Self) !void {
         try self.public_key.check();
     }
@@ -733,11 +525,7 @@ pub const SecretKey = struct {
 
         var i: usize = 2;
         while (i < self.primes.len) : (i += 1) {
-            var prime_buf: [max_modulus_len]u8 = undefined;
-            try self.primes[i].toBytes(&prime_buf, .big);
-            const new_prime_buf = utils.stripLeadingZeros(&prime_buf);
-
-            var prime = try utils.bigFromBytes(alloc, new_prime_buf);
+            var prime = try utils.bigFromFe(alloc, self.primes[i]);
             defer prime.deinit();
 
             var exp = try utils.newBig(alloc);
@@ -1129,6 +917,251 @@ fn checkRSAPublickeyOid(oid: []const u8) !void {
     return;
 }
 
+pub const Crypt = struct {
+    const CryptT = @This();
+
+    /// encrypt short plaintext with public key.
+    pub fn encrypt(public_key: PublicKey, m: Fe) !Fe {
+        const c = try public_key.n.powPublic(m, public_key.e);
+        return c;
+    }
+
+    /// decrypt short ciphertext with secret key.
+    pub fn decrypt(secret_key: SecretKey, c: Fe) !Fe {
+        const n = secret_key.public_key.n;
+        const m = try n.pow(c, secret_key.d);
+        return m;
+    }
+
+    pub fn decrypt_and_check(secret_key: SecretKey, c: Fe) !Fe {
+        const m = try CryptT.decrypt(secret_key, c);
+
+        // In order to defend against errors in the CRT computation, m^e is
+        // calculated, which should match the original ciphertext.
+        const check = try encrypt(secret_key.public_key, m);
+        if (!c.eql(check)) {
+            return error.Internalerror;
+        }
+
+        return m;
+    }
+
+    pub const Pkcs1v15 = struct {
+        /// Encrypt a short message using RSAES-PKCS1-v1_5.
+        pub fn encrypt(alloc: Allocator, random: Random, public_key: PublicKey, msg: []const u8) ![]const u8 {
+            // align variable names with spec
+            const k = utils.byteLen(public_key.n.bits());
+
+            // EM = 0x00 || 0x02 || PS || 0x00 || M.
+            var em = try alloc.alloc(u8, k);
+            defer alloc.free(em);
+
+            em[0] = 0;
+            em[1] = 2;
+
+            const ps = em[2..][0 .. k - msg.len - 3];
+
+            // Section: 7.2.1
+            // PS consists of pseudo-randomly generated nonzero octets.
+            for (ps) |*v| {
+                v.* = random.uintLessThan(u8, 0xff) + 1;
+            }
+
+            em[em.len - msg.len - 1] = 0;
+            @memcpy(em[em.len - msg.len ..][0..msg.len], msg);
+
+            const m = try Fe.fromBytes(public_key.n, em, .big);
+            const e = try CryptT.encrypt(public_key, m);
+
+            const out = try alloc.alloc(u8, k);
+            try e.toBytes(out, .big);
+
+            return out;
+        }
+
+        /// Decrypt a encrtpted message using RSAES-PKCS1-v1_5.
+        pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
+            const n = secret_key.public_key.n;
+            const k = utils.byteLen(n.bits());
+
+            const m = try Fe.fromBytes(n, ciphertext, .big);
+            const e = try CryptT.decrypt(secret_key, m);
+
+            const em = try alloc.alloc(u8, k);
+            try e.toBytes(em, .big);
+
+            // Care shall be taken to ensure that an opponent cannot
+            // distinguish these error conditions, whether by error
+            // message or timing.
+            const msg_start = ct.lastIndexOfScalar(em, 0) orelse em.len;
+            const ps_len = em.len - msg_start;
+            if (ct.@"or"(em[0] != 0, ct.@"or"(em[1] != 2, ps_len < 8))) {
+                return error.Inconsistent;
+            }
+
+            const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
+            defer alloc.free(em);
+
+            return out;
+        }
+    };
+
+    pub const Oaep = struct {
+        const Self = @This();
+
+        /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
+        pub fn encrypt(
+            alloc: Allocator,
+            random: Random,
+            public_key: PublicKey,
+            comptime Hash: type,
+            msg: []const u8,
+            label: []const u8,
+        ) ![]const u8 {
+            return Self.encryptInternal(alloc, random, public_key, Hash, Hash, msg, label);
+        }
+
+        pub fn decrypt(
+            alloc: Allocator,
+            secret_key: SecretKey,
+            comptime Hash: type,
+            ciphertext: []const u8,
+            label: []const u8,
+        ) ![]u8 {
+            return Self.decryptInternal(alloc, secret_key, Hash, Hash, ciphertext, label);
+        }
+
+        pub fn encryptWithOptions(
+            alloc: Allocator,
+            random: Random,
+            public_key: PublicKey,
+            msg: []const u8,
+            opts: OAEPOptions,
+        ) ![]const u8 {
+            if (opts.mgf_hash) |mgf_hash| {
+                return Self.encryptInternal(alloc, random, public_key, opts.hash, mgf_hash, msg, opts.label);
+            }
+
+            return Self.encryptInternal(alloc, random, public_key, opts.hash, opts.hash, msg, opts.label);
+        }
+
+        pub fn decryptWithOptions(
+            alloc: Allocator,
+            secret_key: SecretKey,
+            ciphertext: []const u8,
+            opts: OAEPOptions,
+        ) ![]u8 {
+            if (opts.mgf_hash) |mgf_hash| {
+                return Self.decryptInternal(alloc, secret_key, opts.hash, mgf_hash, ciphertext, opts.label);
+            }
+
+            return Self.decryptInternal(alloc, secret_key, opts.hash, opts.hash, ciphertext, opts.label);
+        }
+
+        /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
+        fn encryptInternal(
+            alloc: Allocator,
+            random: Random,
+            public_key: PublicKey,
+            comptime Hash: type,
+            comptime MgfHash: type,
+            msg: []const u8,
+            label: []const u8,
+        ) ![]const u8 {
+            // align variable names with spec
+            const k = utils.byteLen(public_key.n.bits());
+
+            const digest_size = Hash.digest_length;
+
+            if (msg.len > k - 2 * digest_size - 2) {
+                return error.MessageTooLong;
+            }
+
+            // EM = 0x00 || maskedSeed || maskedDB.
+            var em = try alloc.alloc(u8, k);
+            defer alloc.free(em);
+
+            em[0] = 0;
+            const seed = em[1..][0..digest_size];
+
+            random.bytes(seed);
+
+            // DB = lHash || PS || 0x01 || M.
+            var db = em[1 + seed.len ..];
+            const lHash = labelHash(Hash, label);
+            @memcpy(db[0..lHash.len], &lHash);
+            @memset(db[lHash.len .. db.len - msg.len - 2], 0);
+            db[db.len - msg.len - 1] = 1;
+            @memcpy(db[db.len - msg.len ..], msg);
+
+            var mgf_buf: [max_modulus_len]u8 = undefined;
+
+            const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
+            for (db, db_mask) |*v, m| v.* ^= m;
+
+            const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
+            for (seed, seed_mask) |*v, m| v.* ^= m;
+
+            const m = try Fe.fromBytes(public_key.n, em, .big);
+            const e = try CryptT.encrypt(public_key, m);
+
+            const out = try alloc.alloc(u8, k);
+            try e.toBytes(out, .big);
+
+            return out;
+        }
+
+        fn decryptInternal(
+            alloc: Allocator,
+            secret_key: SecretKey,
+            comptime Hash: type,
+            comptime MgfHash: type,
+            ciphertext: []const u8,
+            label: []const u8,
+        ) ![]u8 {
+            // align variable names with spec
+            const n = secret_key.public_key.n;
+            const k = utils.byteLen(n.bits());
+
+            const digest_size = Hash.digest_length;
+
+            const c = try Fe.fromBytes(n, ciphertext, .big);
+            const exp = try CryptT.decrypt(secret_key, c);
+
+            const em = try alloc.alloc(u8, k);
+            try exp.toBytes(em, .big);
+
+            const y = em[0];
+            const seed = em[1..][0..digest_size];
+            const db = em[1 + digest_size ..];
+
+            var mgf_buf: [max_modulus_len]u8 = undefined;
+
+            const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
+            for (seed, seed_mask) |*v, m| v.* ^= m;
+
+            const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
+            for (db, db_mask) |*v, m| v.* ^= m;
+
+            const expected_hash = labelHash(Hash, label);
+            const actual_hash = db[0..expected_hash.len];
+
+            // Care shall be taken to ensure that an opponent cannot
+            // distinguish these error conditions, whether by error
+            // message or timing.
+            const msg_start = ct.indexOfScalarPos(em, expected_hash.len + 1, 1) orelse 0;
+            if (ct.@"or"(y != 0, ct.@"or"(msg_start == 0, !ct.memEql(&expected_hash, actual_hash)))) {
+                return error.Inconsistent;
+            }
+
+            const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
+            defer alloc.free(em);
+
+            return out;
+        }
+    };
+};
+
 /// Signature Scheme with Appendix v1.5 (RSASSA-PKCS1-v1_5)
 pub fn PKCS1v15(comptime H: type) type {
     return struct {
@@ -1195,15 +1228,23 @@ pub fn PKCS1v15(comptime H: type) type {
             }
 
             fn finalizePrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !PkcsT.Signature {
-                const k = utils.byteLen(self.secret_key.public_key.n.bits());
+                const n = self.secret_key.public_key.n;
+                const k = utils.byteLen(n.bits());
 
                 const buf = try self.alloc.alloc(u8, k);
                 const em = try PkcsT.emsaEncode(msg_hash, buf);
 
-                try self.secret_key.decrypt(em, em);
-
-                const sig = try self.alloc.dupe(u8, em);
                 defer self.alloc.free(buf);
+
+                if (em.len > k) {
+                    return error.MessageTooLong;
+                }
+
+                const em_int = try Fe.fromBytes(n, em, .big);
+                const sig_int = try Crypt.decrypt_and_check(self.secret_key, em_int);
+
+                const sig = try self.alloc.alloc(u8, k);
+                try sig_int.toBytes(sig, .big);
 
                 const siged = PkcsT.Signature.fromBytes(sig);
                 return siged;
@@ -1238,16 +1279,18 @@ pub fn PKCS1v15(comptime H: type) type {
 
             fn verifyPrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !void {
                 const pk = self.public_key;
+                const k = utils.byteLen(pk.n.bits());
                 const s = try Fe.fromBytes(pk.n, self.sig, .big);
-                const emm = try pk.n.powPublic(s, pk.e);
+
+                const emm = try Crypt.encrypt(pk, s);
 
                 var em_buf: [max_modulus_len]u8 = undefined;
-                const em = em_buf[0..utils.byteLen(pk.n.bits())];
+                const em = em_buf[0..k];
                 try emm.toBytes(em, .big);
 
-                var em_buf2: [max_modulus_len]u8 = undefined;
-                const em2 = em_buf2[0..utils.byteLen(pk.n.bits())];
-                const expected = try PkcsT.emsaEncode(msg_hash, em2);
+                var hash_buf: [max_modulus_len]u8 = undefined;
+                const hashs = hash_buf[0..k];
+                const expected = try PkcsT.emsaEncode(msg_hash, hashs);
 
                 if (!std.mem.eql(u8, expected, em)) {
                     return error.Inconsistent;
@@ -1458,15 +1501,24 @@ pub fn Pss(comptime H: type) type {
 
                 const buf = try self.alloc.alloc(u8, max_modulus_len);
 
-                const em_bits = self.secret_key.public_key.n.bits() - 1;
+                const n = self.secret_key.public_key.n;
+
+                const em_bits = n.bits() - 1;
                 const em = try PssT.emsaPSSEncode(msg_hash, salt, em_bits, buf);
 
                 defer self.alloc.free(salt);
-
-                try self.secret_key.decrypt(em, em);
-
-                const sig = try self.alloc.dupe(u8, em);
                 defer self.alloc.free(buf);
+
+                const k = utils.byteLen(n.bits());
+                if (em.len > k) {
+                    return error.MessageTooLong;
+                }
+
+                const em_int = try Fe.fromBytes(n, em, .big);
+                const sig_int = try Crypt.decrypt_and_check(self.secret_key, em_int);
+
+                const sig = try self.alloc.alloc(u8, k);
+                try sig_int.toBytes(sig, .big);
 
                 const siged = PssT.Signature.fromBytes(sig);
                 return siged;
@@ -1523,7 +1575,8 @@ pub fn Pss(comptime H: type) type {
                 const em = em_buf[0..em_len];
 
                 const s = try Fe.fromBytes(pk.n, self.sig, .big);
-                const emm = try pk.n.powPublic(s, pk.e);
+                const emm = try Crypt.encrypt(pk, s);
+
                 try emm.toBytes(em, .big);
 
                 const mod_bits = self.public_key.n.bits();
@@ -1730,11 +1783,11 @@ pub fn encryptPkcs1v15(
     public_key: PublicKey,
     msg: []const u8,
 ) ![]const u8 {
-    return public_key.encryptPkcs1v15(alloc, random, msg);
+    return Crypt.Pkcs1v15.encrypt(alloc, random, public_key, msg);
 }
 
 pub fn decryptPkcs1v15(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
-    return secret_key.decryptPkcs1v15(alloc, ciphertext);
+    return Crypt.Pkcs1v15.decrypt(alloc, secret_key, ciphertext);
 }
 
 /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
@@ -1746,7 +1799,7 @@ pub fn encryptOaep(
     msg: []const u8,
     label: []const u8,
 ) ![]const u8 {
-    return public_key.encryptOaep(alloc, random, Hash, msg, label);
+    return Crypt.Oaep.encrypt(alloc, random, public_key, Hash, msg, label);
 }
 
 pub fn decryptOaep(
@@ -1756,7 +1809,7 @@ pub fn decryptOaep(
     ciphertext: []const u8,
     label: []const u8,
 ) ![]const u8 {
-    return secret_key.decryptOaep(alloc, Hash, ciphertext, label);
+    return Crypt.Oaep.decrypt(alloc, secret_key, Hash, ciphertext, label);
 }
 
 /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
@@ -1767,7 +1820,7 @@ pub fn encryptOaepWithOptions(
     msg: []const u8,
     opts: OAEPOptions,
 ) ![]const u8 {
-    return public_key.encryptOaepWithOptions(alloc, random, msg, opts);
+    return Crypt.Oaep.encryptWithOptions(alloc, random, public_key, msg, opts);
 }
 
 pub fn decryptOaepWithOptions(
@@ -1776,7 +1829,7 @@ pub fn decryptOaepWithOptions(
     ciphertext: []const u8,
     opts: OAEPOptions,
 ) ![]const u8 {
-    return secret_key.decryptOaepWithOptions(alloc, ciphertext, opts);
+    return Crypt.Oaep.decryptWithOptions(alloc, secret_key, ciphertext, opts);
 }
 
 pub fn signPkcs1v15(

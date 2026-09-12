@@ -58,8 +58,8 @@ test "rsa PKCS1-v1_5 encrypt and decrypt" {
     const kp = try testKeypair();
 
     const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
-    const enc = try kp.public_key.encryptPkcs1v15(alloc, random, msg);
-    const dec = try kp.secret_key.decryptPkcs1v15(alloc, enc);
+    const enc = try rsa.Crypt.Pkcs1v15.encrypt(alloc, random, kp.public_key, msg);
+    const dec = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc);
 
     defer alloc.free(enc);
     defer alloc.free(dec);
@@ -73,7 +73,7 @@ test "rsa PKCS1-v1_5 encrypt and decrypt" {
     var enc2: [256]u8 = undefined;
     const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-    const dec2 = try kp.secret_key.decryptPkcs1v15(alloc, enc2_res);
+    const dec2 = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc2_res);
 
     defer alloc.free(dec2);
 
@@ -91,8 +91,8 @@ test "rsa OAEP encrypt and decrypt" {
     const msg = "rsa OAEP encrypt and decrypt";
     const label = "";
 
-    const enc = try kp.public_key.encryptOaep(alloc, random, TestHash, msg, label);
-    const dec = try kp.secret_key.decryptOaep(alloc, TestHash, enc, label);
+    const enc = try rsa.Crypt.Oaep.encrypt(alloc, random, kp.public_key, TestHash, msg, label);
+    const dec = try rsa.Crypt.Oaep.decrypt(alloc, kp.secret_key, TestHash, enc, label);
 
     defer alloc.free(enc);
     defer alloc.free(dec);
@@ -105,7 +105,7 @@ test "rsa OAEP encrypt and decrypt" {
     var enc2: [256]u8 = undefined;
     const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-    const dec2 = try kp.secret_key.decryptOaep(alloc, TestHash, enc2_res, label);
+    const dec2 = try rsa.Crypt.Oaep.decrypt(alloc, kp.secret_key, TestHash, enc2_res, label);
 
     defer alloc.free(dec2);
 
