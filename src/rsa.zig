@@ -80,7 +80,7 @@ pub const PublicKey = struct {
 
     pub fn fromBytes(mod: []const u8, exp: []const u8) !Self {
         const n = try Modulus.fromBytes(mod, .big);
-        if (n.bits() <= 512) {
+        if (n.bits() < 512) {
             return error.InsecureBitCount;
         }
 
@@ -214,7 +214,8 @@ pub const SecretKey = struct {
         p: []const u8,
         q: []const u8,
     ) !Self {
-        const seckey = try Self.fromBytesInternal(alloc, n, e, d, p, q);
+        var seckey = try Self.fromBytesInternal(alloc, n, e, d, p, q);
+        try seckey.precompute(alloc);
         return seckey;
     }
 
@@ -244,6 +245,7 @@ pub const SecretKey = struct {
         var seckey = try Self.fromBytesInternal(alloc, n, e, d, p, q);
 
         if (version == 0) {
+            try seckey.precompute(alloc);
             return seckey;
         }
 
@@ -277,11 +279,14 @@ pub const SecretKey = struct {
             parser.seek(prime_seq.slice.end);
         }
 
-        return .{
+        var seckey2: Self = .{
             .public_key = seckey.public_key,
             .d = seckey.d,
             .primes = try alloc.dupe(Fe, primes[0..index]),
         };
+        try seckey2.precompute(alloc);
+
+        return seckey2;
     }
 
     pub fn fromPKCS8Der(alloc: Allocator, bytes: []const u8) !Self {
@@ -308,42 +313,6 @@ pub const SecretKey = struct {
     pub fn fromDerAuto(alloc: Allocator, bytes: []const u8) !Self {
         const sk = Self.fromPKCS8Der(alloc, bytes) catch {
             return Self.fromDer(alloc, bytes);
-        };
-
-        return sk;
-    }
-
-    pub fn fromBytesWithPrecompute(
-        alloc: Allocator,
-        n: []const u8,
-        e: []const u8,
-        d: []const u8,
-        p: []const u8,
-        q: []const u8,
-    ) !Self {
-        var seckey = try Self.fromBytes(alloc, n, e, d, p, q);
-        try seckey.precompute(alloc);
-
-        return seckey;
-    }
-
-    pub fn fromDerWithPrecompute(alloc: Allocator, bytes: []const u8) !Self {
-        var seckey = try Self.fromDer(alloc, bytes);
-        try seckey.precompute(alloc);
-
-        return seckey;
-    }
-
-    pub fn fromPKCS8DerWithPrecompute(alloc: Allocator, bytes: []const u8) !Self {
-        var seckey = try Self.fromPKCS8Der(alloc, bytes);
-        try seckey.precompute(alloc);
-
-        return seckey;
-    }
-
-    pub fn fromDerAutoWithPrecompute(alloc: Allocator, bytes: []const u8) !Self {
-        const sk = Self.fromPKCS8DerWithPrecompute(alloc, bytes) catch {
-            return Self.fromDerWithPrecompute(alloc, bytes);
         };
 
         return sk;
@@ -946,7 +915,7 @@ pub const Crypt = struct {
     }
 
     /// decrypt short ciphertext with secret key.
-    pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8, need_check: bool) ![]u8 {
+    pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8, check: bool) ![]u8 {
         const n = secret_key.public_key.n;
         const k = utils.byteLen(n.bits());
 
@@ -956,12 +925,12 @@ pub const Crypt = struct {
         const out = try alloc.alloc(u8, k);
         try m.toBytes(out, .big);
 
-        if (need_check) {
+        if (check) {
             // In order to defend against errors in the CRT computation, m^e is
             // calculated, which should match the original ciphertext.
-            const check = try secret_key.public_key.n.powPublic(m, secret_key.public_key.e);
-            if (!c.eql(check)) {
-                return error.Internalerror;
+            const c2 = try n.powPublic(m, secret_key.public_key.e);
+            if (!c.eql(c2)) {
+                return error.InternalError;
             }
         }
 
@@ -1019,7 +988,6 @@ pub const Crypt = struct {
             }
 
             const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
-
             return out;
         }
     };
@@ -1232,17 +1200,12 @@ pub fn PKCS1v15(comptime H: type) type {
             }
 
             fn finalizePrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !PkcsT.Signature {
-                const n = self.secret_key.public_key.n;
-                const k = utils.byteLen(n.bits());
+                const pk = self.secret_key.public_key;
 
-                const buf = try self.alloc.alloc(u8, k);
-                const em = try PkcsT.emsaEncode(msg_hash, buf);
+                const prefix = comptime PkcsT.hashPrefixe(Hash);
 
-                defer self.alloc.free(buf);
-
-                if (em.len > k) {
-                    return error.MessageTooLong;
-                }
+                const em = try PkcsT.emsaEncode(self.alloc, pk, prefix, &msg_hash);
+                defer self.alloc.free(em);
 
                 const sig = try Crypt.decrypt_with_check(self.alloc, self.secret_key, em);
 
@@ -1281,18 +1244,17 @@ pub fn PKCS1v15(comptime H: type) type {
 
             fn verifyPrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !void {
                 const pk = self.public_key;
-                const k = utils.byteLen(pk.n.bits());
 
                 const em = try Crypt.encrypt(self.alloc, pk, self.sig);
                 defer self.alloc.free(em);
 
-                const hash_buf = try self.alloc.alloc(u8, k);
-                const expected = try PkcsT.emsaEncode(msg_hash, hash_buf);
+                const prefix = comptime PkcsT.hashPrefixe(Hash);
 
-                defer self.alloc.free(hash_buf);
+                const expected = try PkcsT.emsaEncode(self.alloc, pk, prefix, &msg_hash);
+                defer self.alloc.free(expected);
 
                 if (!std.mem.eql(u8, expected, em)) {
-                    return error.Inconsistent;
+                    return error.VerifyFail;
                 }
             }
 
@@ -1303,30 +1265,52 @@ pub fn PKCS1v15(comptime H: type) type {
             }
         };
 
+        /// sign with no hash msg
+        pub fn signPlain(alloc: Allocator, secret_key: SecretKey, msg: []const u8) ![]u8 {
+            const pk = secret_key.public_key;
+
+            const em = try PkcsT.emsaEncode(alloc, pk, &[_]u8{}, msg);
+            defer alloc.free(em);
+
+            const sig = try Crypt.decrypt_with_check(alloc, secret_key, em);
+            return sig;
+        }
+
+        pub fn verifyPlain(alloc: Allocator, public_key: PublicKey, msg: []const u8, sig: []u8) !void {
+            const em = try Crypt.encrypt(alloc, public_key, sig);
+            defer alloc.free(em);
+
+            const expected = try PkcsT.emsaEncode(alloc, public_key, &[_]u8{}, msg);
+            defer alloc.free(expected);
+
+            if (!std.mem.eql(u8, expected, em)) {
+                return error.VerifyFail;
+            }
+        }
+
         /// PKCS Encrypted Message Signature Appendix
-        fn emsaEncode(hash: [Hash.digest_length]u8, out: []u8) ![]u8 {
-            const digest_header = comptime PkcsT.digestHeader();
-            const tLen = digest_header.len + Hash.digest_length;
-            const emLen = out.len;
-            if (emLen < tLen + 11) return error.ModulusTooShort;
-            if (out.len < emLen) return error.BufferTooSmall;
+        fn emsaEncode(alloc: Allocator, public_key: PublicKey, prefix: []const u8, hashed: []const u8) ![]u8 {
+            const k = public_key.size();
+            if (k < prefix.len + hashed.len + 2 + 8 + 1) {
+                return error.MessageTooLong;
+            }
 
-            var res = out[0..emLen];
-            res[0] = 0;
-            res[1] = 1;
-            const padding_len = emLen - tLen - 3;
-            @memset(res[2..][0..padding_len], 0xff);
-            res[2 + padding_len] = 0;
-            @memcpy(res[2 + padding_len + 1 ..][0..digest_header.len], digest_header);
-            @memcpy(res[res.len - hash.len ..], &hash);
+            var em = try alloc.alloc(u8, k);
+            em[0] = 0;
+            em[1] = 1;
+            const padding_len = k - prefix.len - hashed.len - 3;
+            @memset(em[2..][0..padding_len], 0xff);
+            em[2 + padding_len] = 0;
+            @memcpy(em[k - prefix.len - hashed.len ..][0..prefix.len], prefix);
+            @memcpy(em[k - hashed.len ..], hashed);
 
-            return res;
+            return em;
         }
 
         /// DER encoded header. Sequence of digest algo + digest.
-        fn digestHeader() []const u8 {
+        fn hashPrefixe(h: type) []const u8 {
             // Section 9.2 Notes 1.
-            return switch (Hash) {
+            return switch (h) {
                 std.crypto.hash.Md5 => &utils.hexToBytes(
                     \\30 20 30 0c 06 08 2a 86 48 86 f7 0d 02 05 05 00 04 10
                 ),
@@ -1468,6 +1452,7 @@ pub fn Pss(comptime H: type) type {
 
             fn finalizePrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !PssT.Signature {
                 const digest_size = Hash.digest_length;
+                const n = self.secret_key.public_key.n;
 
                 // RFC 4055 S3.1
                 const salt = if (self.opts.salt) |s| brk1: {
@@ -1477,7 +1462,7 @@ pub fn Pss(comptime H: type) type {
                     var salt_len: usize = 0;
                     switch (self.opts.salt_leng) {
                         pss_salt_length_auto => {
-                            salt_len = (self.secret_key.public_key.n.bits() - 1 + 7) / 8 - 2 - digest_size;
+                            salt_len = (n.bits() - 1 + 7) / 8 - 2 - digest_size;
                         },
                         pss_salt_length_equals_hash => {
                             salt_len = digest_size;
@@ -1495,15 +1480,11 @@ pub fn Pss(comptime H: type) type {
                     break :brk res;
                 };
 
-                const buf = try self.alloc.alloc(u8, max_modulus_len);
-
-                const n = self.secret_key.public_key.n;
-
                 const em_bits = n.bits() - 1;
-                const em = try PssT.emsaPSSEncode(msg_hash, salt, em_bits, buf);
+                const em = try PssT.emsaPSSEncode(self.alloc, &msg_hash, em_bits, salt, Hash);
 
                 defer self.alloc.free(salt);
-                defer self.alloc.free(buf);
+                defer self.alloc.free(em);
 
                 const k = utils.byteLen(n.bits());
                 if (em.len > k) {
@@ -1566,7 +1547,7 @@ pub fn Pss(comptime H: type) type {
                 defer self.alloc.free(em);
 
                 const mod_bits = pk.n.bits();
-                try PssT.emsaPSSVerify(&msg_hash, em, mod_bits - 1, self.salt_len);
+                try PssT.emsaPSSVerify(&msg_hash, em, mod_bits - 1, self.salt_len, Hash);
             }
 
             pub fn verify(self: *Self) !void {
@@ -1577,27 +1558,32 @@ pub fn Pss(comptime H: type) type {
         };
 
         /// PSS Encrypted Message Signature Appendix
-        fn emsaPSSEncode(msg_hash: [Hash.digest_length]u8, salt: []const u8, em_bits: usize, out: []u8) ![]u8 {
+        fn emsaPSSEncode(alloc: Allocator, msg_hash: []const u8, em_bits: usize, salt: []const u8, hash: type) ![]u8 {
             // emLen = \ceil(emBits/8)
             const em_len = ((em_bits - 1) / 8) + 1;
             const s_len = salt.len;
 
-            const digest_size = Hash.digest_length;
+            const digest_size = hash.digest_length;
+            if (msg_hash.len != digest_size) {
+                return error.InputLongthError;
+            }
 
-            if (em_len < digest_size + s_len + 2) return error.ErrMsgTooLong;
+            if (em_len < digest_size + s_len + 2) {
+                return error.MsgTooLong;
+            }
 
             // EM = maskedDB || H || 0xbc
-            var em = out[0..em_len];
+            var em = try alloc.alloc(u8, em_len);
             em[em.len - 1] = 0xbc;
 
             // M' = (0x)00 00 00 00 00 00 00 00 || mHash || salt;
             // H = Hash(M')
-            const hash = em[em.len - 1 - digest_size ..][0..digest_size];
-            var hasher = Hash.init(.{});
+            const hashed = em[em.len - 1 - digest_size ..][0..digest_size];
+            var hasher = hash.init(.{});
             hasher.update(&([_]u8{0} ** 8));
-            hasher.update(&msg_hash);
+            hasher.update(msg_hash);
             hasher.update(salt);
-            hasher.final(hash);
+            hasher.final(hashed);
 
             // DB = PS || 0x01 || salt
             var db = em[0 .. em_len - digest_size - 1];
@@ -1609,12 +1595,12 @@ pub fn Pss(comptime H: type) type {
             const mgf_len = em_len - digest_size - 1;
             const mgf_out = mgf_buf[0 .. ((mgf_len - 1) / digest_size + 1) * digest_size];
 
-            var dbMask = mgf1(Hash, hash, mgf_out);
-            dbMask = dbMask[0..mgf_len];
+            var db_mask = mgf1(hash, hashed, mgf_out);
+            db_mask = db_mask[0..mgf_len];
 
             var i: usize = 0;
-            while (i < dbMask.len) : (i += 1) {
-                db[i] = db[i] ^ dbMask[i];
+            while (i < db_mask.len) : (i += 1) {
+                db[i] = db[i] ^ db_mask[i];
             }
 
             // Set the leftmost 8emLen - emBits bits of the leftmost octet
@@ -1626,32 +1612,32 @@ pub fn Pss(comptime H: type) type {
             return em;
         }
 
-        fn emsaPSSVerify(mHash: []const u8, em: []const u8, emBit: usize, slen: usize) !void {
-            const digest_size = Hash.digest_length;
+        fn emsaPSSVerify(m_hash: []const u8, em: []const u8, em_bits: usize, slen: usize, hash: type) !void {
+            const digest_size = hash.digest_length;
 
-            var sLen = slen;
+            var s_len = slen;
 
             // 1.   If the length of M is greater than the input limitation for
             //      the hash function (2^61 - 1 octets for SHA-1), output
             //      "inconsistent" and stop.
             // All the cryptographic hash functions in the standard library have a limit of >= 2^61 - 1.
             // Even then, this check is only there for paranoia. In the context of TLS certificates, emBit cannot exceed 4096.
-            if (emBit >= 1 << 61) {
+            if (em_bits >= 1 << 61) {
                 return error.InvalidSignature;
             }
 
             // emLen = \ceil(emBits/8)
-            const emLen = ((emBit - 1) / 8) + 1;
-            std.debug.assert(emLen == em.len);
+            const em_len = ((em_bits - 1) / 8) + 1;
+            std.debug.assert(em_len == em.len);
 
             // 2.   Let mHash = Hash(M), an octet string of length hLen.
             const hlen = digest_size;
-            if (hlen != mHash.len) {
+            if (hlen != m_hash.len) {
                 return error.InvalidSignature;
             }
 
             // 3.   If emLen < hLen + sLen + 2, output "inconsistent" and stop.
-            if (emLen < digest_size + sLen + 2) {
+            if (em_len < digest_size + s_len + 2) {
                 return error.InvalidSignature;
             }
 
@@ -1663,14 +1649,14 @@ pub fn Pss(comptime H: type) type {
 
             // 5.   Let maskedDB be the leftmost emLen - hLen - 1 octets of EM,
             //      and let H be the next hLen octets.
-            const maskedDB = em[0..(emLen - digest_size - 1)];
-            const h = em[(emLen - digest_size - 1)..(emLen - 1)][0..digest_size];
+            const masked_db = em[0..(em_len - digest_size - 1)];
+            const h = em[(em_len - digest_size - 1)..(em_len - 1)][0..digest_size];
 
             // 6.   If the leftmost 8emLen - emBits bits of the leftmost octet in
             //      maskedDB are not all equal to zero, output "inconsistent" and
             //      stop.
-            const zero_bits = emLen * 8 - emBit;
-            var mask: u8 = maskedDB[0];
+            const zero_bits = em_len * 8 - em_bits;
+            var mask: u8 = masked_db[0];
             var i: usize = 0;
             while (i < 8 - zero_bits) : (i += 1) {
                 mask = mask >> 1;
@@ -1680,20 +1666,20 @@ pub fn Pss(comptime H: type) type {
             }
 
             // 7.   Let dbMask = MGF(H, emLen - hLen - 1).
-            const mgf_len = emLen - digest_size - 1;
+            const mgf_len = em_len - digest_size - 1;
             var mgf_out_buf: [512]u8 = undefined;
             if (mgf_len > mgf_out_buf.len) { // Modulus > 4096 bits
                 return error.InvalidSignature;
             }
 
             const mgf_out = mgf_out_buf[0 .. ((mgf_len - 1) / digest_size + 1) * digest_size];
-            var dbMask = mgf1(Hash, h, mgf_out);
-            dbMask = dbMask[0..mgf_len];
+            var db_mask = mgf1(hash, h, mgf_out);
+            db_mask = db_mask[0..mgf_len];
 
             // 8.   Let DB = maskedDB \xor dbMask.
             i = 0;
-            while (i < dbMask.len) : (i += 1) {
-                dbMask[i] = maskedDB[i] ^ dbMask[i];
+            while (i < db_mask.len) : (i += 1) {
+                db_mask[i] = masked_db[i] ^ db_mask[i];
             }
 
             // 9.   Set the leftmost 8emLen - emBits bits of the leftmost octet
@@ -1704,11 +1690,11 @@ pub fn Pss(comptime H: type) type {
                 mask = mask << 1;
                 mask += 1;
             }
-            dbMask[0] = dbMask[0] & mask;
+            db_mask[0] = db_mask[0] & mask;
 
-            if (sLen == pss_salt_length_auto) {
-                if (std.mem.indexOfScalar(u8, dbMask, 0x01)) |ps_len| {
-                    sLen = dbMask.len - ps_len - 1;
+            if (s_len == pss_salt_length_auto) {
+                if (std.mem.indexOfScalar(u8, db_mask, 0x01)) |ps_len| {
+                    s_len = db_mask.len - ps_len - 1;
                 } else {
                     return error.ErrorVerification;
                 }
@@ -1718,19 +1704,19 @@ pub fn Pss(comptime H: type) type {
             //      zero or if the octet at position emLen - hLen - sLen - 1 (the
             //      leftmost position is "position 1") does not have hexadecimal
             //      value 0x01, output "inconsistent" and stop.
-            const ps_len = emLen - digest_size - sLen - 2;
-            for (dbMask[0..ps_len]) |e| {
+            const ps_len = em_len - digest_size - s_len - 2;
+            for (db_mask[0..ps_len]) |e| {
                 if (e != 0x00) {
                     return error.InvalidSignature;
                 }
             }
 
-            if (dbMask[ps_len] != 0x01) {
+            if (db_mask[ps_len] != 0x01) {
                 return error.InvalidSignature;
             }
 
             // 11.  Let salt be the last sLen octets of DB.
-            const salt = dbMask[(dbMask.len - sLen)..];
+            const salt = db_mask[(db_mask.len - s_len)..];
 
             // 12.  Let
             //         M' = (0x)00 00 00 00 00 00 00 00 || mHash || salt ;
@@ -1738,9 +1724,9 @@ pub fn Pss(comptime H: type) type {
             //      initial zero octets.
             // 13.  Let H' = Hash(M'), an octet string of length hLen.
             var h_p: [digest_size]u8 = undefined;
-            var hasher = Hash.init(.{});
+            var hasher = hash.init(.{});
             hasher.update(&([_]u8{0} ** 8));
-            hasher.update(mHash);
+            hasher.update(m_hash);
             hasher.update(salt);
             hasher.final(&h_p);
 

@@ -39,7 +39,6 @@ fn testKeypair() !rsa.KeyPair {
     const keypair_bytes = @embedFile("testdata/id_rsa.der");
 
     var sk = try rsa.SecretKey.fromDer(alloc, keypair_bytes);
-    try sk.precompute(alloc);
     const kp = try rsa.KeyPair.fromSecretKey(sk);
 
     defer sk.deinit(alloc);
@@ -288,7 +287,7 @@ test "SecretKey precompute" {
 
     defer alloc.free(prikey_bytes);
 
-    var pri_key = try rsa.SecretKey.fromPKCS8DerWithPrecompute(alloc, prikey_bytes);
+    var pri_key = try rsa.SecretKey.fromPKCS8Der(alloc, prikey_bytes);
 
     defer pri_key.deinit(alloc);
 
@@ -695,8 +694,6 @@ test "rsa OAEP function encrypt and decrypt with options" {
         defer alloc.free(prikey_bytes);
 
         var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
-        try pri_key.precompute(alloc);
-
         defer pri_key.deinit(alloc);
 
         const check2 = "d1c26a4556c1e747c0388eec95785f38840ea37b55b8577bafc2f59e079da4e7712916839d3b1d9c12bb2a9869ead29471968c8e09d9b7f40587fc4a480cc19d908ff2d76102da695cfd2d4d33d2f1c96450ba1f99532bce9945fba0410ed88e25e648e536200fd6d46152d999034ad561c1086dcdbd7f3ce8aa9617f73efdaa75ddf88888184323c2beefc27822729cc19bc5d3018e76f6a380b6d012a9fd4cb42ba702df06ab8201243b99c5d337824d92178f69458216473c439d6ff2417a32dffbf138061e4e7f97dc72a8dea6bf45a64c6ab2a1105655bf36dd71b3bd6fa38041556d0fd4a8193194ce1ceb78bf3cd5e6bbfa763eb36afe2f146960de0c";
@@ -722,7 +719,7 @@ test "rsa list check" {
     const prikey_bytes = try base64Decode(alloc, prikey);
     defer alloc.free(prikey_bytes);
 
-    var pri_key = try rsa.SecretKey.fromDerWithPrecompute(alloc, prikey_bytes);
+    var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
     defer pri_key.deinit(alloc);
 
     const pub_key = pri_key.public_key;
@@ -1080,8 +1077,6 @@ test "SecretKey precomputeLegacy crts from der" {
     var prikey = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
     defer prikey.deinit(alloc);
 
-    try prikey.precompute(alloc);
-
     const dp = prikey.precomputed.?.dp;
     const dq = prikey.precomputed.?.dq;
     const qinv = prikey.precomputed.?.qinv;
@@ -1295,10 +1290,10 @@ test "SecretKey from der with precompute" {
 
         defer alloc.free(prikey_bytes);
 
-        var pri_key = try rsa.SecretKey.fromPKCS8DerWithPrecompute(alloc, prikey_bytes);
+        var pri_key = try rsa.SecretKey.fromPKCS8Der(alloc, prikey_bytes);
         defer pri_key.deinit(alloc);
 
-        var pri_key2 = try rsa.SecretKey.fromDerAutoWithPrecompute(alloc, prikey_bytes);
+        var pri_key2 = try rsa.SecretKey.fromDerAuto(alloc, prikey_bytes);
         defer pri_key2.deinit(alloc);
     }
 
@@ -1308,10 +1303,10 @@ test "SecretKey from der with precompute" {
 
         defer alloc.free(prikey_bytes);
 
-        var pri_key = try rsa.SecretKey.fromDerWithPrecompute(alloc, prikey_bytes);
+        var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
         defer pri_key.deinit(alloc);
 
-        var pri_key2 = try rsa.SecretKey.fromDerAutoWithPrecompute(alloc, prikey_bytes);
+        var pri_key2 = try rsa.SecretKey.fromDerAuto(alloc, prikey_bytes);
         defer pri_key2.deinit(alloc);
     }
 
@@ -1328,7 +1323,7 @@ test "SecretKey from der with precompute" {
         defer alloc.free(p);
         defer alloc.free(q);
 
-        var pri_key = try rsa.SecretKey.fromBytesWithPrecompute(alloc, n, e, d, p, q);
+        var pri_key = try rsa.SecretKey.fromBytes(alloc, n, e, d, p, q);
         defer pri_key.deinit(alloc);
     }
 
@@ -1504,4 +1499,60 @@ test "sign vec with pkcs8 key" {
             .salt_leng = rsa.pss_salt_length_auto,
         });
     }
+}
+
+test "signer signPlain" {
+    const alloc = testing.allocator;
+
+    const prikey = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDh/nCDmXaEqxN416b9XjV8acmbqA52uPzKbesWQRT/BPxEO2dKAURk5CkcSBDskvfzFR9TRjeDppjD1BPSEnuYKnP0SvmotoxcnBnHMfMBqGV8DSJyppu8k4y9C3MPq5C/rA8TJm0NNaJCL0BfAGkeyw+elgYifbRlm42VfYGsKVyIeEI9Qghk5Cf8yapMPfWNLKOhChXsyGExMBMonHZeseFH7UNwonNAFJMAaelhVqqmwBFqn6fBGKmvedRO7HIaiEFNKaMna6xJ5Bccjds4MhF7UC5PIdx4Bt7CfxvjrbIRYoBF2l30CNBblIhU992zPkHoaVhDkt1gq3OdO7LvAgMBAAECggEBALCJrWTv7ahnZ3efpqAIBuogTVBd8KaHjVmokds5jehFAbdfXClwYfgaT477MNVNXYmzN1w63sTl0DIxqiYRMCFHEHuGUg6cQ3tYqb50Y2spG9XTANTlF4UxEeDfX8ue7xz7kG8aNlf6TL084iEUVgmrAJGWikZJQjGZWPmtKC3OTeJY5Bev5qHVuMRe+XEM5aQc3ph+lXlOF0Qp0Eg8YRWprrev2faH6prMqu2JGomoac6sfM4QJhtEViF7Gw0XPthPTbF19IefuAwi9psMM/9CnQ+MTWN2i6IxoUdicsFuC+Wdlb3K5V/+uldNSr+ePEhcya+YTLK9IOcVwWKQHykCgYEA8XvuEribf+t0ZPtfxr+DC9nZHXbVoFx0/ARpSG+P/fp3Hn3rO9iYQ6OtZ9mEXTzf+dhYTaRWq6PbCOz6i0It+J8QSBdxU9OcQ4871mDe41IvSc1CCGMW4PeIYtNQEK0zrqhN7SMtKyUd7yAsYRCrIzMc7NjE2qJvFw5kh7xC3Q0CgYEA75Qjn5daNYSAOa/ILdOs5J/8oIaO27RNK/fSKm/btsMsyum8+YP/mWmm1MXBzG9WEKzZv5yEKOWCEVJYVsFQsGt9yLYW2WIKU5UxiuU0F1RImF/dphIbYOh7oGC3WfYKk2f+K7ftjc196ZkEkDuE2Xh1h75/67Mzztx1DbXj6OsCgYBcDRfFfyWXb5Og4smxo1M680H2H1RzmorlfnD7sbs733wE3Y8L8xanwf7Z9WqleA0Q2k1e22RGbWGTV3JyHzoS6d90+6qxf5qzjigLIkYUdUGdambfd5ZDD1ioA1Ej6kInM/TwjlYreiyc+LCyF36FHnjKOB9iEEU0jsH3k+YRCQKBgHMVLPuHX6zfhhyvxK/Gw4FbHKYbnNoKxRs+wvThoKAtJwIdv0n4TzppVttUV2CVhrkh3sM9MvrWLGGXtZmO6Oyl5dkZJuarQpydyRuYOCqQsQKI4lbY0c/+PQxwCQMsvi3KwXxMsM7yC+6/M0L5ZDp2s7ZOGvKktVlD6vJ4Eg+bAoGARnGGprSBW8dAb/s53r0paPh4k/bySrXdGEprLwk6g3S8+aylcmjUdjcIq4dEb4A/nv12dx1Sc4y99c62R0zi+TT6FYBIFDMz3HNVzO0Jr6SgC6CNVotL0D725CioR5U1NyTHHRLZth69HLuEZCZQlPJCbePXMRRHmOl1svzcVuo=";
+    const pubkey = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4f5wg5l2hKsTeNem/V41fGnJm6gOdrj8ym3rFkEU/wT8RDtnSgFEZOQpHEgQ7JL38xUfU0Y3g6aYw9QT0hJ7mCpz9Er5qLaMXJwZxzHzAahlfA0icqabvJOMvQtzD6uQv6wPEyZtDTWiQi9AXwBpHssPnpYGIn20ZZuNlX2BrClciHhCPUIIZOQn/MmqTD31jSyjoQoV7MhhMTATKJx2XrHhR+1DcKJzQBSTAGnpYVaqpsARap+nwRipr3nUTuxyGohBTSmjJ2usSeQXHI3bODIRe1AuTyHceAbewn8b462yEWKARdpd9AjQW5SIVPfdsz5B6GlYQ5LdYKtznTuy7wIDAQAB";
+
+    const prikey_bytes = try base64Decode(alloc, prikey);
+    const pubkey_bytes = try base64Decode(alloc, pubkey);
+
+    defer alloc.free(prikey_bytes);
+    defer alloc.free(pubkey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromPKCS8Der(alloc, prikey_bytes);
+    const pub_key = try rsa.PublicKey.fromPKCS8Der(pubkey_bytes);
+
+    defer pri_key.deinit(alloc);
+
+    const msg = "rsa PKCS1v15 signature";
+
+    const pkcs1v15 = rsa.PKCS1v15(TestHash);
+
+    const sig = try pkcs1v15.signPlain(alloc, pri_key, msg);
+    try testing.expectEqual(true, sig.len > 0);
+
+    defer alloc.free(sig);
+
+    try pkcs1v15.verifyPlain(alloc, pub_key, msg, sig);
+}
+
+test "signPlain unpadded signature" {
+    const alloc = testing.allocator;
+
+    const prikey = "MIIBOgIBAAJBALKZD0nEffqM1ACuak0bijtqE2QrI/KLADv7l3kK3ppMyCuLKoF0fd7Ai2KW5ToIwzFofvJcS/STa6HA5gQenRUCAwEAAQJBAIq9amn00aS0h/CrjXqu/ThglAXJmZhOMPVn4eiu7/ROixi9sex436MaVeMqSNf7Ex9a8fRNfWss7Sqd9eWuRTUCIQDasvGASLqmjeffBNLTXV2A5g4t+kLVCpsEIZAycV5GswIhANEPLmax0ME/EO+ZJ79TJKN5yiGBRsv5yvx5UiHxajEXAiAhAol5N4EUyq6I9w1rYdhPMGpLfk7AIU2snfRJ6Nq2CQIgFrPsWRCkV+gOYcajD17rEqmuLrdIRexpg8N1DOSXoJ8CIGlStAboUGBxTDq3ZroNism3DaMIbKPyYrAqhKov1h5V";
+    const prikey_bytes = try base64Decode(alloc, prikey);
+
+    defer alloc.free(prikey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
+    const pub_key = pri_key.public_key;
+
+    defer pri_key.deinit(alloc);
+
+    const msg = "Thu Dec 19 18:06:16 EST 2013\n";
+    // const expected_sig = try base64Decode(alloc, "pX4DR8azytjdQ1rtUiC040FjkepuQut5q2ZFX1pTjBrOVKNjgsCDyiJDGZTCNoh9qpXYbhl7iEym30BWWwuiZg==");
+    const expected_sig = "a57e0347c6b3cad8dd435aed5220b4e3416391ea6e42eb79ab66455f5a538c1ace54a36382c083ca22431994c236887daa95d86e197b884ca6df40565b0ba266";
+
+    const pkcs1v15 = rsa.PKCS1v15(TestHash);
+
+    const sig = try pkcs1v15.signPlain(alloc, pri_key, msg);
+    try testing.expectFmt(expected_sig, "{x}", .{sig});
+
+    defer alloc.free(sig);
+
+    try pkcs1v15.verifyPlain(alloc, pub_key, msg, sig);
 }
