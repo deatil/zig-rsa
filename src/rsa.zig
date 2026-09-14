@@ -906,7 +906,7 @@ pub const Crypt = struct {
         const m = try Fe.fromBytes(public_key.n, plaintext, .big);
         const c = try public_key.n.powPublic(m, public_key.e);
 
-        const k = utils.byteLen(public_key.n.bits());
+        const k = public_key.size();
 
         const out = try alloc.alloc(u8, k);
         try c.toBytes(out, .big);
@@ -917,7 +917,7 @@ pub const Crypt = struct {
     /// decrypt short ciphertext with secret key.
     pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8, check: bool) ![]u8 {
         const n = secret_key.public_key.n;
-        const k = utils.byteLen(n.bits());
+        const k = secret_key.public_key.size();
 
         const c = try Fe.fromBytes(n, ciphertext, .big);
         const m = try n.pow(c, secret_key.d);
@@ -949,7 +949,7 @@ pub const Crypt = struct {
         /// Encrypt a short message using RSAES-PKCS1-v1_5.
         pub fn encrypt(alloc: Allocator, random: Random, public_key: PublicKey, msg: []const u8) ![]const u8 {
             // align variable names with spec
-            const k = utils.byteLen(public_key.n.bits());
+            const k = public_key.size();
 
             // EM = 0x00 || 0x02 || PS || 0x00 || M.
             var em = try alloc.alloc(u8, k);
@@ -1055,7 +1055,7 @@ pub const Crypt = struct {
             label: []const u8,
         ) ![]const u8 {
             // align variable names with spec
-            const k = utils.byteLen(public_key.n.bits());
+            const k = public_key.size();
 
             const digest_size = Hash.digest_length;
 
@@ -1357,6 +1357,7 @@ pub fn PKCS1v15(comptime H: type) type {
                     \\30 51 30 0d 06 09 60 86 48 01 65 03 04 02 0a 
                     \\05 00 04 40
                 ),
+                // sm3.SM3 => &[_]u8{ 0x30, 0x30, 0x30, 0x0c, 0x06, 0x08, 0x2a, 0x81, 0x1c, 0xcf, 0x55, 0x01, 0x83, 0x78, 0x05, 0x00, 0x04, 0x20 },
                 else => @compileError("unknown Hash " ++ @typeName(Hash)),
             };
         }
@@ -1486,7 +1487,7 @@ pub fn Pss(comptime H: type) type {
                 defer self.alloc.free(salt);
                 defer self.alloc.free(em);
 
-                const k = utils.byteLen(n.bits());
+                const k = self.secret_key.public_key.size();
                 if (em.len > k) {
                     return error.MessageTooLong;
                 }
