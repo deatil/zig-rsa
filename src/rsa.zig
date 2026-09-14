@@ -45,19 +45,6 @@ const Pkcs1PublicKey = struct {
     e: asn1.Opaque(asn1.Tag.universal(.integer, false)),
 };
 
-// OAEPOptions corresponds to options for OAEP decryption.
-pub const OAEPOptions = struct {
-    // hash is the hash function that will be used when generating the mask.
-    hash: type,
-
-    // mgf_hash is the hash function used for MGF1.
-    mgf_hash: ?type = null,
-
-    // label is an arbitrary byte string that must be equal to the value
-    // used when encrypting.
-    label: []const u8 = "",
-};
-
 pub const PublicKey = struct {
     n: Modulus,
     e: Fe,
@@ -897,6 +884,19 @@ fn checkRSAPublickeyOid(oid: []const u8) !void {
 
     return;
 }
+
+// OAEPOptions corresponds to options for OAEP decryption.
+pub const OAEPOptions = struct {
+    // hash is the hash function that will be used when generating the mask.
+    hash: type,
+
+    // mgf_hash is the hash function used for MGF1.
+    mgf_hash: ?type = null,
+
+    // label is an arbitrary byte string that must be equal to the value
+    // used when encrypting.
+    label: []const u8 = "",
+};
 
 pub const Crypt = struct {
     const CryptT = @This();
