@@ -673,7 +673,10 @@ pub const KeyPair = struct {
             };
             try sk.precompute(alloc);
 
-            return .{ .public_key = pk, .secret_key = sk };
+            return .{
+                .public_key = pk,
+                .secret_key = sk,
+            };
         }
     }
 
@@ -1230,7 +1233,7 @@ pub fn PKCS1v15(comptime H: type) type {
             const Self = @This();
 
             fn init(alloc: Allocator, sig: PkcsT.Signature, public_key: PublicKey) Self {
-                return Verifier{
+                return .{
                     .alloc = alloc,
                     .h = Hash.init(.{}),
                     .sig = sig.bytes,
