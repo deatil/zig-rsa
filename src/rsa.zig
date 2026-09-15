@@ -1078,7 +1078,7 @@ pub const Crypt = struct {
             // DB = lHash || PS || 0x01 || M.
             var db = em[1 + seed.len ..];
             const lHash = labelHash(Hash, label);
-            @memcpy(db[0..lHash.len], &lHash);
+            @memcpy(db[0..lHash.len], lHash);
             @memset(db[lHash.len .. db.len - msg.len - 2], 0);
             db[db.len - msg.len - 1] = 1;
             @memcpy(db[db.len - msg.len ..], msg);
@@ -1127,12 +1127,54 @@ pub const Crypt = struct {
             // distinguish these error conditions, whether by error
             // message or timing.
             const msg_start = ct.indexOfScalarPos(em, expected_hash.len + 1, 1) orelse 0;
-            if (ct.@"or"(y != 0, ct.@"or"(msg_start == 0, !ct.memEql(&expected_hash, actual_hash)))) {
+            if (ct.@"or"(y != 0, ct.@"or"(msg_start == 0, !ct.memEql(expected_hash, actual_hash)))) {
                 return error.Inconsistent;
             }
 
             const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
             return out;
+        }
+
+        inline fn labelHash(comptime Hash: type, label: []const u8) []const u8 {
+            if (label.len == 0) {
+                // magic constants from NIST
+                return &switch (Hash) {
+                    std.crypto.hash.Sha1 => .{
+                        0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d,
+                        0x32, 0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90,
+                        0xaf, 0xd8, 0x07, 0x09,
+                    },
+                    sha2.Sha256 => .{
+                        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
+                        0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+                        0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
+                        0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+                    },
+                    sha2.Sha384 => .{
+                        0x38, 0xb0, 0x60, 0xa7, 0x51, 0xac, 0x96, 0x38,
+                        0x4c, 0xd9, 0x32, 0x7e, 0xb1, 0xb1, 0xe3, 0x6a,
+                        0x21, 0xfd, 0xb7, 0x11, 0x14, 0xbe, 0x07, 0x43,
+                        0x4c, 0x0c, 0xc7, 0xbf, 0x63, 0xf6, 0xe1, 0xda,
+                        0x27, 0x4e, 0xde, 0xbf, 0xe7, 0x6f, 0x65, 0xfb,
+                        0xd5, 0x1a, 0xd2, 0xf1, 0x48, 0x98, 0xb9, 0x5b,
+                    },
+                    sha2.Sha512 => .{
+                        0xcf, 0x83, 0xe1, 0x35, 0x7e, 0xef, 0xb8, 0xbd,
+                        0xf1, 0x54, 0x28, 0x50, 0xd6, 0x6d, 0x80, 0x07,
+                        0xd6, 0x20, 0xe4, 0x05, 0x0b, 0x57, 0x15, 0xdc,
+                        0x83, 0xf4, 0xa9, 0x21, 0xd3, 0x6c, 0xe9, 0xce,
+                        0x47, 0xd0, 0xd1, 0x3c, 0x5d, 0x85, 0xf2, 0xb0,
+                        0xff, 0x83, 0x18, 0xd2, 0x87, 0x7e, 0xec, 0x2f,
+                        0x63, 0xb9, 0x31, 0xbd, 0x47, 0x41, 0x7a, 0x81,
+                        0xa5, 0x38, 0x32, 0x7a, 0xf9, 0x27, 0xda, 0x3e,
+                    },
+                    else => {},
+                };
+            }
+
+            var res: [Hash.digest_length]u8 = undefined;
+            Hash.hash(label, &res, .{});
+            return res[0..];
         }
     };
 };
@@ -1313,54 +1355,75 @@ pub fn PKCS1v15(comptime H: type) type {
         /// DER encoded header. Sequence of digest algo + digest.
         fn hashPrefixe(h: type) []const u8 {
             // Section 9.2 Notes 1.
-            return switch (h) {
-                std.crypto.hash.Md5 => &utils.hexToBytes(
-                    \\30 20 30 0c 06 08 2a 86 48 86 f7 0d 02 05 05 00 04 10
-                ),
-                std.crypto.hash.Sha1 => &utils.hexToBytes(
-                    \\30 21 30 09 06 05 2b 0e 03 02 1a 05 00 04 14
-                ),
-                sha2.Sha224 => &utils.hexToBytes(
-                    \\30 2d 30 0d 06 09 60 86 48 01 65 03 04 02 04
-                    \\05 00 04 1c
-                ),
-                sha2.Sha256 => &utils.hexToBytes(
-                    \\30 31 30 0d 06 09 60 86 48 01 65 03 04 02 01 05 00
-                    \\04 20
-                ),
-                sha2.Sha384 => &utils.hexToBytes(
-                    \\30 41 30 0d 06 09 60 86 48 01 65 03 04 02 02 05 00
-                    \\04 30
-                ),
-                sha2.Sha512 => &utils.hexToBytes(
-                    \\30 51 30 0d 06 09 60 86 48 01 65 03 04 02 03 05 00
-                    \\04 40
-                ),
-                sha2.Sha512_224 => &utils.hexToBytes(
-                    \\30 2d 30 0d 06 09 60 86 48 01 65 03 04 02 05
-                    \\05 00 04 1c
-                ),
-                sha2.Sha512_256 => &utils.hexToBytes(
-                    \\30 31 30 0d 06 09 60 86 48 01 65 03 04 02 06
-                    \\05 00 04 20
-                ),
-                sha3.Sha3_224 => &utils.hexToBytes(
-                    \\30 2d 30 0d 06 09 60 86 48 01 65 03 04 02 07 
-                    \\05 00 04 1C
-                ),
-                sha3.Sha3_256 => &utils.hexToBytes(
-                    \\30 31 30 0d 06 09 60 86 48 01 65 03 04 02 08 
-                    \\05 00 04 20
-                ),
-                sha3.Sha3_384 => &utils.hexToBytes(
-                    \\30 41 30 0d 06 09 60 86 48 01 65 03 04 02 09 
-                    \\05 00 04 30
-                ),
-                sha3.Sha3_512 => &utils.hexToBytes(
-                    \\30 51 30 0d 06 09 60 86 48 01 65 03 04 02 0a 
-                    \\05 00 04 40
-                ),
-                // sm3.SM3 => &[_]u8{ 0x30, 0x30, 0x30, 0x0c, 0x06, 0x08, 0x2a, 0x81, 0x1c, 0xcf, 0x55, 0x01, 0x83, 0x78, 0x05, 0x00, 0x04, 0x20 },
+            return &switch (h) {
+                std.crypto.hash.Md5 => .{
+                    0x30, 0x20, 0x30, 0x0C, 0x06, 0x08, 0x2A, 0x86,
+                    0x48, 0x86, 0xF7, 0x0D, 0x02, 0x05, 0x05, 0x00,
+                    0x04, 0x10,
+                },
+                std.crypto.hash.Sha1 => .{
+                    0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e,
+                    0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14,
+                },
+                sha2.Sha224 => .{
+                    0x30, 0x2d, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x04, 0x05,
+                    0x00, 0x04, 0x1c,
+                },
+                sha2.Sha256 => .{
+                    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+                    0x00, 0x04, 0x20,
+                },
+                sha2.Sha384 => .{
+                    0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05,
+                    0x00, 0x04, 0x30,
+                },
+                sha2.Sha512 => .{
+                    0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05,
+                    0x00, 0x04, 0x40,
+                },
+                sha2.Sha512_224 => .{
+                    0x30, 0x2d, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x05, 0x05,
+                    0x00, 0x04, 0x1C,
+                },
+                sha2.Sha512_256 => .{
+                    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x06, 0x05,
+                    0x00, 0x04, 0x20,
+                },
+                sha3.Sha3_224 => .{
+                    0x30, 0x2d, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x07, 0x05,
+                    0x00, 0x04, 0x1C,
+                },
+                sha3.Sha3_256 => .{
+                    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x08, 0x05,
+                    0x00, 0x04, 0x20,
+                },
+                sha3.Sha3_384 => .{
+                    0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x09, 0x05,
+                    0x00, 0x04, 0x30,
+                },
+                sha3.Sha3_512 => .{
+                    0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+                    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x0a, 0x05,
+                    0x00, 0x04, 0x40,
+                },
+                // hash.ripemd => .{
+                //     0x30, 0x20, 0x30, 0x08, 0x06, 0x06, 0x28, 0xcf,
+                //     0x06, 0x03, 0x00, 0x31, 0x04, 0x14,
+                // },
+                // sm3.SM3 => .{
+                //     0x30, 0x30, 0x30, 0x0c, 0x06, 0x08, 0x2a, 0x81,
+                //     0x1c, 0xcf, 0x55, 0x01, 0x83, 0x78, 0x05, 0x00,
+                //     0x04, 0x20,
+                // },
                 else => @compileError("unknown Hash " ++ @typeName(Hash)),
             };
         }
@@ -1896,38 +1959,28 @@ fn mgf1(comptime Hash: type, seed: []const u8, out: []u8) []u8 {
     return out;
 }
 
-/// For OAEP.
-inline fn labelHash(comptime Hash: type, label: []const u8) [Hash.digest_length]u8 {
-    if (label.len == 0) {
-        // magic constants from NIST
-        switch (Hash) {
-            std.crypto.hash.Sha1 => return utils.hexToBytes(
-                \\da39a3ee 5e6b4b0d 3255bfef 95601890
-                \\afd80709
-            ),
-            sha2.Sha256 => return utils.hexToBytes(
-                \\e3b0c442 98fc1c14 9afbf4c8 996fb924
-                \\27ae41e4 649b934c a495991b 7852b855
-            ),
-            sha2.Sha384 => return utils.hexToBytes(
-                \\38b060a7 51ac9638 4cd9327e b1b1e36a
-                \\21fdb711 14be0743 4c0cc7bf 63f6e1da
-                \\274edebf e76f65fb d51ad2f1 4898b95b
-            ),
-            sha2.Sha512 => return utils.hexToBytes(
-                \\cf83e135 7eefb8bd f1542850 d66d8007
-                \\d620e405 0b5715dc 83f4a921 d36ce9ce
-                \\47d0d13c 5d85f2b0 ff8318d2 877eec2f
-                \\63b931bd 47417a81 a538327a f927da3e
-            ),
-            // just use the empty hash...
-            else => {},
-        }
-    }
-
-    var res: [Hash.digest_length]u8 = undefined;
-    Hash.hash(label, &res, .{});
-    return res;
+test "mgf1" {
+    const Hash = std.crypto.hash.sha2.Sha256;
+    var out: [Hash.digest_length * 2 + 1]u8 = undefined;
+    try std.testing.expectEqualSlices(
+        u8,
+        &utils.hexToBytes(
+            \\ed 1b 84 6b b9 26 39 00  c8 17 82 ad 08 eb 17 01
+            \\fa 8c 72 21 c6 57 63 77  31 7f 5c e8 09 89 9f
+        ),
+        mgf1(Hash, "asdf", out[0 .. Hash.digest_length - 1]),
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &utils.hexToBytes(
+            \\ed 1b 84 6b b9 26 39 00  c8 17 82 ad 08 eb 17 01
+            \\fa 8c 72 21 c6 57 63 77  31 7f 5c e8 09 89 9f 5a
+            \\22 F2 80 D5 28 08 F4 93  83 76 00 DE 09 E4 EC 92
+            \\4A 2C 7C EF 0D F7 7B BE  8F 7F 12 CB 8F 33 A6 65
+            \\AB
+        ),
+        mgf1(Hash, "asdf", &out),
+    );
 }
 
 const ct = if (std.options.side_channels_mitigations == .none) ct_unprotected else ct_protected;
@@ -1989,30 +2042,6 @@ const ct_protected = struct {
         return (@intFromBool(a) | @intFromBool(b)) == 1;
     }
 };
-
-test "mgf1" {
-    const Hash = std.crypto.hash.sha2.Sha256;
-    var out: [Hash.digest_length * 2 + 1]u8 = undefined;
-    try std.testing.expectEqualSlices(
-        u8,
-        &utils.hexToBytes(
-            \\ed 1b 84 6b b9 26 39 00  c8 17 82 ad 08 eb 17 01
-            \\fa 8c 72 21 c6 57 63 77  31 7f 5c e8 09 89 9f
-        ),
-        mgf1(Hash, "asdf", out[0 .. Hash.digest_length - 1]),
-    );
-    try std.testing.expectEqualSlices(
-        u8,
-        &utils.hexToBytes(
-            \\ed 1b 84 6b b9 26 39 00  c8 17 82 ad 08 eb 17 01
-            \\fa 8c 72 21 c6 57 63 77  31 7f 5c e8 09 89 9f 5a
-            \\22 F2 80 D5 28 08 F4 93  83 76 00 DE 09 E4 EC 92
-            \\4A 2C 7C EF 0D F7 7B BE  8F 7F 12 CB 8F 33 A6 65
-            \\AB
-        ),
-        mgf1(Hash, "asdf", &out),
-    );
-}
 
 test "ct" {
     const c = ct_unprotected;

@@ -1556,3 +1556,40 @@ test "signPlain unpadded signature" {
 
     try pkcs1v15.verifyPlain(alloc, pub_key, msg, sig);
 }
+
+test "OaepWithHash" {
+    const sha2 = std.crypto.hash.sha2;
+    const kp = try testKeypair();
+
+    try testOaepWithHash(std.crypto.hash.Sha1, kp, "");
+    try testOaepWithHash(sha2.Sha256, kp, "");
+    try testOaepWithHash(sha2.Sha384, kp, "");
+    try testOaepWithHash(sha2.Sha512, kp, "");
+
+    try testOaepWithHash(std.crypto.hash.Sha1, kp, "test-lable22");
+    try testOaepWithHash(sha2.Sha256, kp, "test-lable22");
+    try testOaepWithHash(sha2.Sha384, kp, "test-lable22");
+    try testOaepWithHash(sha2.Sha512, kp, "test-lable22");
+}
+
+fn testOaepWithHash(comptime H: type, kp: rsa.KeyPair, comptime label: []const u8) !void {
+    const alloc = testing.allocator;
+
+    const random = utils.cryptoRand(testing.io);
+
+    const msg = "rsa OAEP encrypt and decrypt";
+
+    const enc = try rsa.encryptOaepWithOptions(alloc, random, kp.public_key, msg, .{
+        .hash = H,
+        .label = label,
+    });
+    const dec = try rsa.decryptOaepWithOptions(alloc, kp.secret_key, enc, .{
+        .hash = H,
+        .label = label,
+    });
+
+    defer alloc.free(enc);
+    defer alloc.free(dec);
+
+    try std.testing.expectEqualSlices(u8, msg, dec);
+}
