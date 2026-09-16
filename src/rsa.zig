@@ -948,20 +948,54 @@ pub const Crypt = struct {
         return CryptT.decrypt(alloc, secret_key, ciphertext, true);
     }
 
-    pub const Pkcs1v15 = struct {
-        /// Encrypt a short message using RSAES-PKCS1-v1_5.
-        pub fn encrypt(alloc: Allocator, random: Random, public_key: PublicKey, msg: []const u8) ![]const u8 {
-            // align variable names with spec
-            const k = public_key.size();
+    pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, plaintext: []const u8) ![]const u8 {
+        const m = try Fe.fromBytes(secret_key.public_key.n, plaintext, .big);
+        const c = try secret_key.public_key.n.powPublic(m, secret_key.d);
 
+        const k = secret_key.public_key.size();
+
+        const out = try alloc.alloc(u8, k);
+        try c.toBytes(out, .big);
+
+        return out;
+    }
+
+    pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8) ![]u8 {
+        const n = public_key.n;
+        const k = public_key.size();
+
+        const c = try Fe.fromBytes(n, ciphertext, .big);
+        const m = try n.pow(c, public_key.e);
+
+        const out = try alloc.alloc(u8, k);
+        try m.toBytes(out, .big);
+
+        return out;
+    }
+
+    pub const Padding = struct {
+        pub fn noPad(alloc: Allocator, em_len: usize, msg: []const u8) ![]const u8 {
+            if (em_len != msg.len) {
+                return error.MsgLengthError;
+            }
+
+            const out = try alloc.dupe(u8, msg);
+            return out;
+        }
+
+        pub fn noUnpad(alloc: Allocator, em: []const u8) ![]const u8 {
+            const out = try alloc.dupe(u8, em);
+            return out;
+        }
+
+        pub fn pkcs1Type1Pad(alloc: Allocator, random: Random, em_len: usize, msg: []const u8) ![]const u8 {
             // EM = 0x00 || 0x02 || PS || 0x00 || M.
-            var em = try alloc.alloc(u8, k);
-            defer alloc.free(em);
+            var em = try alloc.alloc(u8, em_len);
 
             em[0] = 0;
             em[1] = 2;
 
-            const ps = em[2..][0 .. k - msg.len - 3];
+            const ps = em[2..][0 .. em_len - msg.len - 3];
 
             // Section: 7.2.1
             // PS consists of pseudo-randomly generated nonzero octets.
@@ -972,15 +1006,10 @@ pub const Crypt = struct {
             em[em.len - msg.len - 1] = 0;
             @memcpy(em[em.len - msg.len ..][0..msg.len], msg);
 
-            const out = try CryptT.encrypt(alloc, public_key, em);
-            return out;
+            return em;
         }
 
-        /// Decrypt a encrtpted message using RSAES-PKCS1-v1_5.
-        pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
-            const em = try CryptT.decrypt_without_check(alloc, secret_key, ciphertext);
-            defer alloc.free(em);
-
+        pub fn pkcs1Type1Unpad(alloc: Allocator, em: []const u8) ![]const u8 {
             // Care shall be taken to ensure that an opponent cannot
             // distinguish these error conditions, whether by error
             // message or timing.
@@ -991,6 +1020,186 @@ pub const Crypt = struct {
             }
 
             const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
+            return out;
+        }
+
+        pub fn pkcs1Type2Pad(alloc: Allocator, em_len: usize, msg: []const u8) ![]const u8 {
+            // EM = 0x00 || 0x01 || PS || 0x00 || M.
+            var em = try alloc.alloc(u8, em_len);
+
+            em[0] = 0;
+            em[1] = 1;
+
+            const ps = em[2..][0 .. em_len - msg.len - 3];
+
+            @memset(ps[0..], 0xff);
+
+            em[em.len - msg.len - 1] = 0;
+            @memcpy(em[em.len - msg.len ..][0..msg.len], msg);
+
+            return em;
+        }
+
+        pub fn pkcs1Type2Unpad(alloc: Allocator, em: []const u8) ![]const u8 {
+            if (ct.@"or"(em[0] != 0, ct.@"and"(em[1] != 0, em[1] != 1))) {
+                return error.Inconsistent;
+            }
+
+            var i: usize = 2;
+            while (i < em.len) {
+                if (em[i] != 0xff) {
+                    if (em[i] == 0) {
+                        break;
+                    }
+                }
+
+                i += 1;
+            }
+
+            i += 1;
+
+            if (i == em.len) {
+                return &[_]u8{};
+            }
+
+            if (i - 1 < 8) {
+                return error.Inconsistent;
+            }
+
+            const out = try alloc.dupe(u8, em[i..]);
+            return out;
+        }
+
+        pub fn x931Pad(alloc: Allocator, em_len: usize, msg: []const u8) ![]const u8 {
+            var em = try alloc.alloc(u8, em_len);
+
+            const j = em_len - msg.len - 2;
+            if (j < 0) {
+                error.MsgTooLarge;
+            }
+
+            if (j == 0) {
+                em[0] = 0x6a;
+            } else {
+                em[0] = 0x6b;
+                if (j > 1) {
+                    const ps = em[1..][0 .. j - 1];
+                    @memset(ps[0..], 0xbb);
+                }
+                em[j - 1] = 0xba;
+            }
+
+            @memcpy(em[em.len - msg.len - 1 ..][0..msg.len], msg);
+            em[em.len - 1] = 0xcc;
+
+            return em;
+        }
+
+        pub fn x931Unpad(alloc: Allocator, em: []const u8) ![]const u8 {
+            var i: usize = 0;
+            var j: usize = 0;
+
+            if (em[0] != 0x6a and em[0] != 0x6b) {
+                return error.InvalidHeader;
+            }
+
+            if (em[0] == 0x6b) {
+                j = em.len - 3;
+
+                i = 0;
+                while (i < j) : (i += 1) {
+                    if (em[i + 1] == 0xba) {
+                        break;
+                    }
+
+                    if (em[i + 1] != 0xbb) {
+                        return error.InvalidPadding;
+                    }
+                }
+
+                j -= i;
+
+                if (i == 0) {
+                    return error.InvalidPadding;
+                }
+            } else {
+                j = em.len - 2;
+            }
+
+            if (em[em.len - 1] != 0xcc) {
+                return error.InvalidTrailer;
+            }
+
+            const out = try alloc.dupe(u8, em[em.len - j .. em.len - 1]);
+            return out;
+        }
+    };
+
+    pub const Pkcs1v15 = struct {
+        pub const RsaPadding = enum {
+            pkcs1_padding,
+            x931_padding,
+            no_padding,
+        };
+
+        pub const Options = struct {
+            padding: RsaPadding = .pkcs1_padding,
+        };
+
+        /// encrypt a short message using RSAES-PKCS1-v1_5.
+        pub fn encrypt(alloc: Allocator, random: Random, public_key: PublicKey, msg: []const u8, opts: Options) ![]const u8 {
+            // align variable names with spec
+            const k = public_key.size();
+
+            const em = switch (opts.padding) {
+                .pkcs1_padding => try Padding.pkcs1Type1Pad(alloc, random, k, msg),
+                .x931_padding => try Padding.x931Pad(alloc, k, msg),
+                .no_padding => try Padding.noPad(alloc, k, msg),
+            };
+            defer alloc.free(em);
+
+            const out = try CryptT.encrypt(alloc, public_key, em);
+            return out;
+        }
+
+        /// decrypt a encrtpted message using RSAES-PKCS1-v1_5.
+        pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8, opts: Options) ![]const u8 {
+            const em = try CryptT.decrypt_without_check(alloc, secret_key, ciphertext);
+            defer alloc.free(em);
+
+            const out = switch (opts.padding) {
+                .pkcs1_padding => try Padding.pkcs1Type1Unpad(alloc, em),
+                .x931_padding => try Padding.x931Unpad(alloc, em),
+                .no_padding => try Padding.noUnpad(alloc, em),
+            };
+            return out;
+        }
+
+        /// encryptSecretKey a short message using RSAES-PKCS1-v1_5.
+        pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, msg: []const u8, opts: Options) ![]const u8 {
+            const k = secret_key.public_key.size();
+
+            const em = switch (opts.padding) {
+                .pkcs1_padding => try Padding.pkcs1Type2Pad(alloc, k, msg),
+                .x931_padding => try Padding.x931Pad(alloc, k, msg),
+                .no_padding => try Padding.noPad(alloc, k, msg),
+            };
+            defer alloc.free(em);
+
+            const out = try CryptT.encryptSecretKey(alloc, secret_key, em);
+            return out;
+        }
+
+        /// decryptPublicKey a encrtpted message using RSAES-PKCS1-v1_5.
+        pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8, opts: Options) ![]const u8 {
+            const em = try CryptT.decryptPublicKey(alloc, public_key, ciphertext);
+            defer alloc.free(em);
+
+            const out = switch (opts.padding) {
+                .pkcs1_padding => try Padding.pkcs1Type2Unpad(alloc, em),
+                .x931_padding => try Padding.x931Unpad(alloc, em),
+                .no_padding => try Padding.noUnpad(alloc, em),
+            };
             return out;
         }
     };
@@ -1415,7 +1624,7 @@ pub fn PKCS1v15(comptime H: type) type {
                     0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x0a, 0x05,
                     0x00, 0x04, 0x40,
                 },
-                // hash.ripemd => .{
+                // hash.ripemd160 => .{
                 //     0x30, 0x20, 0x30, 0x08, 0x06, 0x06, 0x28, 0xcf,
                 //     0x06, 0x03, 0x00, 0x31, 0x04, 0x14,
                 // },
@@ -1822,16 +2031,36 @@ pub fn encryptPkcs1v15(
     random: Random,
     public_key: PublicKey,
     msg: []const u8,
+    opts: Crypt.Pkcs1v15.Options,
 ) ![]const u8 {
-    return Crypt.Pkcs1v15.encrypt(alloc, random, public_key, msg);
+    return Crypt.Pkcs1v15.encrypt(alloc, random, public_key, msg, opts);
 }
 
 pub fn decryptPkcs1v15(
     alloc: Allocator,
     secret_key: SecretKey,
     ciphertext: []const u8,
+    opts: Crypt.Pkcs1v15.Options,
 ) ![]const u8 {
-    return Crypt.Pkcs1v15.decrypt(alloc, secret_key, ciphertext);
+    return Crypt.Pkcs1v15.decrypt(alloc, secret_key, ciphertext, opts);
+}
+
+pub fn encryptSecretKeyPkcs1v15(
+    alloc: Allocator,
+    secret_key: SecretKey,
+    msg: []const u8,
+    opts: Crypt.Pkcs1v15.Options,
+) ![]const u8 {
+    return Crypt.Pkcs1v15.encryptSecretKey(alloc, secret_key, msg, opts);
+}
+
+pub fn decryptPublicKeyPkcs1v15(
+    alloc: Allocator,
+    public_key: PublicKey,
+    ciphertext: []const u8,
+    opts: Crypt.Pkcs1v15.Options,
+) ![]const u8 {
+    return Crypt.Pkcs1v15.decryptPublicKey(alloc, public_key, ciphertext, opts);
 }
 
 /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).

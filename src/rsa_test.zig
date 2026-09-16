@@ -57,8 +57,8 @@ test "rsa PKCS1-v1_5 encrypt and decrypt" {
     const kp = try testKeypair();
 
     const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
-    const enc = try rsa.Crypt.Pkcs1v15.encrypt(alloc, random, kp.public_key, msg);
-    const dec = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc);
+    const enc = try rsa.Crypt.Pkcs1v15.encrypt(alloc, random, kp.public_key, msg, .{});
+    const dec = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc, .{});
 
     defer alloc.free(enc);
     defer alloc.free(dec);
@@ -72,7 +72,7 @@ test "rsa PKCS1-v1_5 encrypt and decrypt" {
     var enc2: [256]u8 = undefined;
     const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-    const dec2 = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc2_res);
+    const dec2 = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc2_res, .{});
 
     defer alloc.free(dec2);
 
@@ -360,8 +360,8 @@ test "rsa PKCS1-v1_5 function encrypt and decrypt" {
     const kp = try testKeypair();
 
     const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
-    const enc = try rsa.encryptPkcs1v15(alloc, random, kp.public_key, msg);
-    const dec = try rsa.decryptPkcs1v15(alloc, kp.secret_key, enc);
+    const enc = try rsa.encryptPkcs1v15(alloc, random, kp.public_key, msg, .{});
+    const dec = try rsa.decryptPkcs1v15(alloc, kp.secret_key, enc, .{});
 
     defer alloc.free(enc);
     defer alloc.free(dec);
@@ -374,7 +374,7 @@ test "rsa PKCS1-v1_5 function encrypt and decrypt" {
     var enc2: [256]u8 = undefined;
     const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-    const dec2 = try rsa.decryptPkcs1v15(alloc, kp.secret_key, enc2_res);
+    const dec2 = try rsa.decryptPkcs1v15(alloc, kp.secret_key, enc2_res, .{});
     defer alloc.free(dec2);
 
     try std.testing.expectEqualSlices(u8, msg, dec2);
@@ -740,7 +740,7 @@ test "rsa list check" {
         var enc2: [256]u8 = undefined;
         const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-        const dec2 = try rsa.decryptPkcs1v15(alloc, pri_key, enc2_res);
+        const dec2 = try rsa.decryptPkcs1v15(alloc, pri_key, enc2_res, .{});
         defer alloc.free(dec2);
 
         try std.testing.expectEqualStrings(msg, dec2);
@@ -1592,4 +1592,209 @@ fn testOaepWithHash(comptime H: type, kp: rsa.KeyPair, comptime label: []const u
     defer alloc.free(dec);
 
     try std.testing.expectEqualSlices(u8, msg, dec);
+}
+
+test "encryptSecretKeyPkcs1v15" {
+    const alloc = testing.allocator;
+
+    const prikey = "MIIBOgIBAAJBALKZD0nEffqM1ACuak0bijtqE2QrI/KLADv7l3kK3ppMyCuLKoF0fd7Ai2KW5ToIwzFofvJcS/STa6HA5gQenRUCAwEAAQJBAIq9amn00aS0h/CrjXqu/ThglAXJmZhOMPVn4eiu7/ROixi9sex436MaVeMqSNf7Ex9a8fRNfWss7Sqd9eWuRTUCIQDasvGASLqmjeffBNLTXV2A5g4t+kLVCpsEIZAycV5GswIhANEPLmax0ME/EO+ZJ79TJKN5yiGBRsv5yvx5UiHxajEXAiAhAol5N4EUyq6I9w1rYdhPMGpLfk7AIU2snfRJ6Nq2CQIgFrPsWRCkV+gOYcajD17rEqmuLrdIRexpg8N1DOSXoJ8CIGlStAboUGBxTDq3ZroNism3DaMIbKPyYrAqhKov1h5V";
+    const prikey_bytes = try base64Decode(alloc, prikey);
+
+    defer alloc.free(prikey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
+    const pub_key = pri_key.public_key;
+
+    defer pri_key.deinit(alloc);
+
+    try testing.expectFmt("64", "{d}", .{pub_key.size()});
+
+    const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
+
+    {
+        const enc = try rsa.encryptSecretKeyPkcs1v15(alloc, pri_key, msg, .{});
+        const dec = try rsa.decryptPublicKeyPkcs1v15(alloc, pub_key, enc, .{});
+
+        defer alloc.free(enc);
+        defer alloc.free(dec);
+
+        try std.testing.expectEqualSlices(u8, msg, dec);
+        try testing.expectFmt(msg, "{s}", .{dec});
+        // try testing.expectFmt("222", "{x}", .{enc});
+
+        // ==========
+
+        const check2 = "7b1783ab067d84749b14f4da0fe63467a16c087ac1edf552387665e73047ebd1cc881fc064b5b2e427ceebefd50616f9ada687c828416e44bdaf29ed07d62551";
+        var enc2: [256]u8 = undefined;
+        const enc2_res = try fmt.hexToBytes(&enc2, check2);
+
+        const dec2 = try rsa.decryptPublicKeyPkcs1v15(alloc, pub_key, enc2_res, .{});
+        defer alloc.free(dec2);
+
+        try testing.expectFmt(msg, "{s}", .{dec2});
+    }
+
+    {
+        const enc = try rsa.encryptSecretKeyPkcs1v15(alloc, pri_key, msg, .{
+            .padding = .x931_padding,
+        });
+        const dec = try rsa.decryptPublicKeyPkcs1v15(alloc, pub_key, enc, .{
+            .padding = .x931_padding,
+        });
+
+        defer alloc.free(enc);
+        defer alloc.free(dec);
+
+        try std.testing.expectEqualSlices(u8, msg, dec);
+        try testing.expectFmt(msg, "{s}", .{dec});
+        // try testing.expectFmt("222", "{x}", .{enc});
+
+        // ==========
+
+        const check2 = "0fbbdeca6e2f0b074c95dae80d6ec1ddb37c8089693500a9469b87ab76106c11ad001d95e52cd022b245f60ddf083613fce37277c8e1ebf7a9ebadfab92935a4";
+        var enc2: [256]u8 = undefined;
+        const enc2_res = try fmt.hexToBytes(&enc2, check2);
+
+        const dec2 = try rsa.decryptPublicKeyPkcs1v15(alloc, pub_key, enc2_res, .{
+            .padding = .x931_padding,
+        });
+        defer alloc.free(dec2);
+
+        try testing.expectFmt(msg, "{s}", .{dec2});
+    }
+
+    {
+        const msg2 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt and dec";
+
+        const enc = try rsa.encryptSecretKeyPkcs1v15(alloc, pri_key, msg2, .{
+            .padding = .no_padding,
+        });
+        const dec = try rsa.decryptPublicKeyPkcs1v15(alloc, pub_key, enc, .{
+            .padding = .no_padding,
+        });
+
+        defer alloc.free(enc);
+        defer alloc.free(dec);
+
+        try std.testing.expectEqualSlices(u8, msg2, dec);
+        try testing.expectFmt(msg2, "{s}", .{dec});
+        // try testing.expectFmt("222", "{x}", .{enc});
+
+        // ==========
+
+        const check2 = "397f0d2b34463c22dee6fb11edcb881d0c0a9d8ba5bb1587cf259ce5d177c7769b5776927be17c687650602a79c0f45317d85010676b90444f27de51b01725a7";
+        var enc2: [256]u8 = undefined;
+        const enc2_res = try fmt.hexToBytes(&enc2, check2);
+
+        const dec2 = try rsa.decryptPublicKeyPkcs1v15(alloc, pub_key, enc2_res, .{
+            .padding = .no_padding,
+        });
+        defer alloc.free(dec2);
+
+        try testing.expectFmt(msg2, "{s}", .{dec2});
+    }
+}
+
+test "encryptPkcs1v15" {
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    const random = utils.cryptoRand(io);
+
+    const prikey = "MIIBOgIBAAJBALKZD0nEffqM1ACuak0bijtqE2QrI/KLADv7l3kK3ppMyCuLKoF0fd7Ai2KW5ToIwzFofvJcS/STa6HA5gQenRUCAwEAAQJBAIq9amn00aS0h/CrjXqu/ThglAXJmZhOMPVn4eiu7/ROixi9sex436MaVeMqSNf7Ex9a8fRNfWss7Sqd9eWuRTUCIQDasvGASLqmjeffBNLTXV2A5g4t+kLVCpsEIZAycV5GswIhANEPLmax0ME/EO+ZJ79TJKN5yiGBRsv5yvx5UiHxajEXAiAhAol5N4EUyq6I9w1rYdhPMGpLfk7AIU2snfRJ6Nq2CQIgFrPsWRCkV+gOYcajD17rEqmuLrdIRexpg8N1DOSXoJ8CIGlStAboUGBxTDq3ZroNism3DaMIbKPyYrAqhKov1h5V";
+    const prikey_bytes = try base64Decode(alloc, prikey);
+
+    defer alloc.free(prikey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
+    const pub_key = pri_key.public_key;
+
+    defer pri_key.deinit(alloc);
+
+    try testing.expectFmt("64", "{d}", .{pub_key.size()});
+
+    const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
+
+    {
+        const enc = try rsa.encryptPkcs1v15(alloc, random, pub_key, msg, .{});
+        const dec = try rsa.decryptPkcs1v15(alloc, pri_key, enc, .{});
+
+        defer alloc.free(enc);
+        defer alloc.free(dec);
+
+        try std.testing.expectEqualSlices(u8, msg, dec);
+        try testing.expectFmt(msg, "{s}", .{dec});
+        // try testing.expectFmt("222", "{x}", .{enc});
+
+        // ==========
+
+        const check2 = "24d17d224f3181383660c4e7d3d4092cc9f7fb015b344aa24afb90e1979fdfc35e7561b1fe217eb18371bf84a8b54e27b043d7b2f69d0418d6621ff0ab10c484";
+        var enc2: [256]u8 = undefined;
+        const enc2_res = try fmt.hexToBytes(&enc2, check2);
+
+        const dec2 = try rsa.decryptPkcs1v15(alloc, pri_key, enc2_res, .{});
+        defer alloc.free(dec2);
+
+        try testing.expectFmt(msg, "{s}", .{dec2});
+    }
+
+    {
+        const enc = try rsa.encryptPkcs1v15(alloc, random, pub_key, msg, .{
+            .padding = .x931_padding,
+        });
+        const dec = try rsa.decryptPkcs1v15(alloc, pri_key, enc, .{
+            .padding = .x931_padding,
+        });
+
+        defer alloc.free(enc);
+        defer alloc.free(dec);
+
+        try std.testing.expectEqualSlices(u8, msg, dec);
+        try testing.expectFmt(msg, "{s}", .{dec});
+        // try testing.expectFmt("222", "{x}", .{enc});
+
+        // ==========
+
+        const check2 = "a7562e496ac1487c16242128a58bdf66a6b75690c3d958a164cb70c5d2479cb894bfa5f6177c82817ecc15d0479e146bc51cf36fb20ad5f04a6d33b76eab13b6";
+        var enc2: [256]u8 = undefined;
+        const enc2_res = try fmt.hexToBytes(&enc2, check2);
+
+        const dec2 = try rsa.decryptPkcs1v15(alloc, pri_key, enc2_res, .{
+            .padding = .x931_padding,
+        });
+        defer alloc.free(dec2);
+
+        try testing.expectFmt(msg, "{s}", .{dec2});
+    }
+
+    {
+        const msg2 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt and dec";
+
+        const enc = try rsa.encryptPkcs1v15(alloc, random, pub_key, msg2, .{
+            .padding = .no_padding,
+        });
+        const dec = try rsa.decryptPkcs1v15(alloc, pri_key, enc, .{
+            .padding = .no_padding,
+        });
+
+        defer alloc.free(enc);
+        defer alloc.free(dec);
+
+        try std.testing.expectEqualSlices(u8, msg2, dec);
+        try testing.expectFmt(msg2, "{s}", .{dec});
+        // try testing.expectFmt("222", "{x}", .{enc});
+
+        // ==========
+
+        const check2 = "2994d74cb93e57f170f964f8401388b42ba904478a2bba2f0839a313f4a067da998003a99a0f8d7957577e86b220aa0536cbb77c0a53b535140e585a6089ca65";
+        var enc2: [256]u8 = undefined;
+        const enc2_res = try fmt.hexToBytes(&enc2, check2);
+
+        const dec2 = try rsa.decryptPkcs1v15(alloc, pri_key, enc2_res, .{
+            .padding = .no_padding,
+        });
+        defer alloc.free(dec2);
+
+        try testing.expectFmt(msg2, "{s}", .{dec2});
+    }
 }
