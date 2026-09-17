@@ -1855,35 +1855,6 @@ test "Encrypter encrypt" {
     }
 
     {
-        const enc = try rsa.Crypt.Encrypter.encrypt(alloc, random, pub_key, msg, .{
-            .padding = .x931_padding,
-        });
-        const dec = try rsa.Crypt.Encrypter.decrypt(alloc, pri_key, enc, .{
-            .padding = .x931_padding,
-        });
-
-        defer alloc.free(enc);
-        defer alloc.free(dec);
-
-        try std.testing.expectEqualSlices(u8, msg, dec);
-        try testing.expectFmt(msg, "{s}", .{dec});
-        // try testing.expectFmt("222", "{x}", .{enc});
-
-        // ==========
-
-        const check2 = "a8de190dac0aec1c0ad1cdf2eeece64e9e71845475c315d05c06ac6f35a359fa3afcb89175519c450b8e46a9b64ca1f66740e078aa6efc481bbb2eed61dcf5ed";
-        var enc2: [256]u8 = undefined;
-        const enc2_res = try fmt.hexToBytes(&enc2, check2);
-
-        const dec2 = try rsa.Crypt.Encrypter.decrypt(alloc, pri_key, enc2_res, .{
-            .padding = .x931_padding,
-        });
-        defer alloc.free(dec2);
-
-        try testing.expectFmt(msg, "{s}", .{dec2});
-    }
-
-    {
         const msg2 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt and dec";
 
         const enc = try rsa.Crypt.Encrypter.encrypt(alloc, random, pub_key, msg2, .{
@@ -1912,60 +1883,6 @@ test "Encrypter encrypt" {
         defer alloc.free(dec2);
 
         try testing.expectFmt(msg2, "{s}", .{dec2});
-    }
-
-    {
-        const msg2 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt and d";
-
-        const enc = try rsa.Crypt.Encrypter.encrypt(alloc, random, pub_key, msg2, .{
-            .padding = .x931_padding,
-        });
-        const dec = try rsa.Crypt.Encrypter.decrypt(alloc, pri_key, enc, .{
-            .padding = .x931_padding,
-        });
-
-        defer alloc.free(enc);
-        defer alloc.free(dec);
-
-        try std.testing.expectEqualSlices(u8, msg2, dec);
-        try testing.expectFmt(msg2, "{s}", .{dec});
-        // try testing.expectFmt("222", "{x}", .{enc});
-    }
-
-    {
-        const msg2 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt andd";
-
-        const enc = try rsa.Crypt.Encrypter.encrypt(alloc, random, pub_key, msg2, .{
-            .padding = .x931_padding,
-        });
-        const dec = try rsa.Crypt.Encrypter.decrypt(alloc, pri_key, enc, .{
-            .padding = .x931_padding,
-        });
-
-        defer alloc.free(enc);
-        defer alloc.free(dec);
-
-        try std.testing.expectEqualSlices(u8, msg2, dec);
-        try testing.expectFmt(msg2, "{s}", .{dec});
-        // try testing.expectFmt("222", "{x}", .{enc});
-    }
-
-    {
-        const msg2 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt and";
-
-        const enc = try rsa.Crypt.Encrypter.encrypt(alloc, random, pub_key, msg2, .{
-            .padding = .x931_padding,
-        });
-        const dec = try rsa.Crypt.Encrypter.decrypt(alloc, pri_key, enc, .{
-            .padding = .x931_padding,
-        });
-
-        defer alloc.free(enc);
-        defer alloc.free(dec);
-
-        try std.testing.expectEqualSlices(u8, msg2, dec);
-        try testing.expectFmt(msg2, "{s}", .{dec});
-        // try testing.expectFmt("222", "{x}", .{enc});
     }
 }
 
