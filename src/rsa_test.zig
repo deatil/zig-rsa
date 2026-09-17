@@ -57,8 +57,8 @@ test "rsa PKCS1-v1_5 encrypt and decrypt" {
     const kp = try testKeypair();
 
     const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
-    const enc = try rsa.Crypt.Pkcs1v15.encrypt(alloc, random, kp.public_key, msg, .{});
-    const dec = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc, .{});
+    const enc = try rsa.Crypt.Pkcs1v15.encrypt(alloc, random, kp.public_key, msg);
+    const dec = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc);
 
     defer alloc.free(enc);
     defer alloc.free(dec);
@@ -72,7 +72,7 @@ test "rsa PKCS1-v1_5 encrypt and decrypt" {
     var enc2: [256]u8 = undefined;
     const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-    const dec2 = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc2_res, .{});
+    const dec2 = try rsa.Crypt.Pkcs1v15.decrypt(alloc, kp.secret_key, enc2_res);
 
     defer alloc.free(dec2);
 
@@ -360,8 +360,8 @@ test "rsa PKCS1-v1_5 function encrypt and decrypt" {
     const kp = try testKeypair();
 
     const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
-    const enc = try rsa.encryptPkcs1v15(alloc, random, kp.public_key, msg, .{});
-    const dec = try rsa.decryptPkcs1v15(alloc, kp.secret_key, enc, .{});
+    const enc = try rsa.encryptPkcs1v15(alloc, random, kp.public_key, msg);
+    const dec = try rsa.decryptPkcs1v15(alloc, kp.secret_key, enc);
 
     defer alloc.free(enc);
     defer alloc.free(dec);
@@ -374,7 +374,7 @@ test "rsa PKCS1-v1_5 function encrypt and decrypt" {
     var enc2: [256]u8 = undefined;
     const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-    const dec2 = try rsa.decryptPkcs1v15(alloc, kp.secret_key, enc2_res, .{});
+    const dec2 = try rsa.decryptPkcs1v15(alloc, kp.secret_key, enc2_res);
     defer alloc.free(dec2);
 
     try std.testing.expectEqualSlices(u8, msg, dec2);
@@ -740,7 +740,7 @@ test "rsa list check" {
         var enc2: [256]u8 = undefined;
         const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-        const dec2 = try rsa.decryptPkcs1v15(alloc, pri_key, enc2_res, .{});
+        const dec2 = try rsa.decryptPkcs1v15(alloc, pri_key, enc2_res);
         defer alloc.free(dec2);
 
         try std.testing.expectEqualStrings(msg, dec2);
