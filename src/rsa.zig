@@ -935,9 +935,26 @@ pub const Crypt = struct {
         return CryptT.decrypt(alloc, secret_key, ciphertext, true);
     }
 
-    pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, plaintext: []const u8) ![]const u8 {
-        const m = try Fe.fromBytes(secret_key.public_key.n, plaintext, .big);
-        const c = try secret_key.public_key.n.powPublic(m, secret_key.d);
+    pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, plaintext: []const u8, opts: Encrypter.Options) ![]const u8 {
+        const n = secret_key.public_key.n;
+        const m = try Fe.fromBytes(n, plaintext, .big);
+        var c = try n.powPublic(m, secret_key.d);
+
+        if (opts.padding == .x931_padding) {
+            const nn = try utils.bigFromModulus(n);
+            const cc = try utils.bigFromFe(c);
+
+            var f = try utils.newBig(alloc);
+            f.sub(nn.toConst(), cc.toConst());
+
+            defer nn.deinit();
+            defer cc.deinit();
+            defer f.deinit();
+
+            if (f.order(cc) == .lt) {
+                c = try utils.feFromBig(f);
+            }
+        }
 
         const k = secret_key.public_key.size();
 
@@ -947,12 +964,37 @@ pub const Crypt = struct {
         return out;
     }
 
-    pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8) ![]u8 {
+    pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8, opts: Encrypter.Options) ![]u8 {
         const n = public_key.n;
         const k = public_key.size();
 
         const c = try Fe.fromBytes(n, ciphertext, .big);
         const m = try n.pow(c, public_key.e);
+
+        const bigint16 = try utils.bigFromInt(16);
+        const mm = try utils.bigFromFe(m);
+
+        var quot = try utils.newBig(alloc);
+        var m2 = try utils.newBig(alloc);
+        try quot.divFloor(&m2, &mm, &bigint16);
+
+        defer bigint16.deinit();
+        defer mm.deinit();
+        defer quot.deinit();
+        defer m2.deinit();
+
+        const m2int = try m2.toInt(i32);
+        if ((opts.padding == .x931_padding) and (m2int != 12)) {
+            const nn = try utils.bigFromModulus(n);
+
+            var f = try utils.newBig(alloc);
+            f.sub(nn.toConst(), mm.toConst());
+
+            defer nn.deinit();
+            defer f.deinit();
+
+            m = try utils.feFromBig(f);
+        }
 
         const out = try alloc.alloc(u8, k);
         try m.toBytes(out, .big);
@@ -1161,8 +1203,10 @@ pub const Crypt = struct {
 
             const em = switch (opts.padding) {
                 .pkcs1_padding => try Padding.pkcs1Type2Pad(alloc, random, k, msg),
-                .x931_padding => try Padding.x931Pad(alloc, k, msg),
                 .no_padding => try Padding.noPad(alloc, k, msg),
+                else => {
+                    return error.RsaPaddingNotSupported;
+                },
             };
             defer alloc.free(em);
 
@@ -1178,8 +1222,10 @@ pub const Crypt = struct {
 
             const out = switch (opts.padding) {
                 .pkcs1_padding => try Padding.pkcs1Type2Unpad(alloc, k, em),
-                .x931_padding => try Padding.x931Unpad(alloc, k, em),
                 .no_padding => try Padding.noUnpad(alloc, k, em),
+                else => {
+                    return error.RsaPaddingNotSupported;
+                },
             };
             return out;
         }
@@ -1194,12 +1240,12 @@ pub const Crypt = struct {
             };
             defer alloc.free(em);
 
-            const out = try CryptT.encryptSecretKey(alloc, secret_key, em);
+            const out = try CryptT.encryptSecretKey(alloc, secret_key, em, opts);
             return out;
         }
 
         pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8, opts: Options) ![]const u8 {
-            const em = try CryptT.decryptPublicKey(alloc, public_key, ciphertext);
+            const em = try CryptT.decryptPublicKey(alloc, public_key, ciphertext, opts);
             defer alloc.free(em);
 
             const k = public_key.size();

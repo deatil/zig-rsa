@@ -78,6 +78,15 @@ pub fn bigFromFe(alloc: Allocator, fe: Fe) !BigInt {
     return bigFromBytes(alloc, new_buf);
 }
 
+pub fn bigFromModulus(alloc: Allocator, mod: Modulus) !BigInt {
+    var buf: [max_modulus_len]u8 = undefined;
+    try mod.toBytes(&buf, .big);
+
+    const new_buf = stripLeadingZeros(&buf);
+
+    return bigFromBytes(alloc, new_buf);
+}
+
 /// Non-negative `BigInt` -> canonical `Fe` of `m` (fails if out of range).
 pub fn feFromBig(m: Modulus, x: *const BigInt) !Fe {
     if (!x.isPositive() and !x.eqlZero()) return error.InvalidSet;

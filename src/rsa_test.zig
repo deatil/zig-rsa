@@ -1968,3 +1968,28 @@ test "Encrypter encrypt" {
         // try testing.expectFmt("222", "{x}", .{enc});
     }
 }
+
+test "decryptPublicKey check" {
+    const alloc = testing.allocator;
+
+    const prikey = "MIICWwIBAAKBgQCXkhwdfZkthwkHIjrS6RQHx5QQz99uV6NbnNds/WyKlUDfVoh6lVcT85qrqKNLmiC1ThgYkJz4IspZwxiPNbT5fXEJ5VYi30h+61Nu4kgSYPXGbAcVmF5XcIcaFgCMh8Is2a0mtDBvv+34Wo8fClWwzeRuf1ghjvxw7Ps0WG2HpwIDAQABAoGAe2bEpynzxUJUkk9HDyIeYbsWjJ2BbkfBwzutlJm7fhTILU05bnwZ2i+SNMHmuQ2yJYqASberZMaGcpBJdYcnYFwD7gCuoXxQokoM/AXzCljlcsUTcZLhhz820TQI/ZIZ5wmojqW/+08h1rGg5zTgWc0k0Vz3HxIpDDIpAneN7VkCQQDGLQVu+GdvkUZ5Oky81y9BBRDNQ1qRv4rghDnJckYK2nrH8mb81Abc2jl5u3CCu2P5D7gu+cDw8OUZhSos236zAkEAw8vdQFCpdr09KdwwwsluNKxAD2rlFlU1bkvZi1qqoiiDn4hSYYJ4j6VwSDVi6pNJhLo8Li08yRdN12FFgynNPQJAGeJng0cOu5POEKd8vm2cznFK8ISLn93U1d5vbdBvNZuzzcnribpn6xDV0QCagXjYZf+XnwsgGFhelCbAi3tf4QJAdKibAx8MWXsXXkGbq/NofmnDIWyHYm8Sjs0SqT00Pbn18q++peqe+reP1vY4IZvwSezMvpaliQshjhqe2C+n4QJAOG1YEz/6HO1WENJSrCYm052XY6WUYWovpoQK7H+s7hjs337p1vYdte9DzX7KlWAVjLvW94SPQ4+rfAiseKG7zQ==";
+    const prikey_bytes = try base64Decode(alloc, prikey);
+
+    defer alloc.free(prikey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
+    const pub_key = pri_key.public_key;
+
+    defer pri_key.deinit(alloc);
+
+    const check2 = "2B576194CCA758B99DE32BB18CEACB77D0EB4AA04E7B44153265F6E812A8F63B2F97F1F06121CEECE7B5B45B22869F067F73D7D97504E2F625324E4127350F711864B6A305F08A50F86FFC0DC52A677A0E9742431193E6F9AB33813390EB403ED8768E14EB237CE15921572BE5870E777468D743032E41DE7FC681EDC1D0824B";
+    var enc2: [256]u8 = undefined;
+    const enc2_res = try fmt.hexToBytes(&enc2, check2);
+
+    const dec2 = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc2_res, .{
+        .padding = .x931_padding,
+    });
+    defer alloc.free(dec2);
+
+    try testing.expectFmt("Hello RSA X9.31", "{s}", .{dec2});
+}
