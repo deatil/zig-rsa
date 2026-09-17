@@ -153,7 +153,6 @@ encryptPkcs1v15(
     random: std.Random,
     public_key: PublicKey,
     msg: []const u8,
-    opts: Crypt.Pkcs1v15.Options,
 ) ![]const u8
 ~~~
 
@@ -162,7 +161,6 @@ pub fn decryptPkcs1v15(
     alloc: Allocator,
     secret_key: SecretKey,
     ciphertext: []const u8,
-    opts: Crypt.Pkcs1v15.Options,
 ) ![]const u8
 ~~~
 

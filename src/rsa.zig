@@ -68,7 +68,7 @@ pub const PublicKey = struct {
     pub fn fromBytes(mod: []const u8, exp: []const u8) !Self {
         const n = try Modulus.fromBytes(mod, .big);
         if (n.bits() < 512) {
-            return error.InsecureBitCount;
+            return error.RsaInsecureBitCount;
         }
 
         const e = try Fe.fromBytes(n, exp, .big);
@@ -137,15 +137,15 @@ pub const PublicKey = struct {
 
     pub fn check(self: Self) !void {
         if (self.n.v.isZero()) {
-            return error.MissingPublicModulus;
+            return error.RsaMissingPublicModulus;
         }
 
         // > the RSA public exponent e is an integer between 3 and n - 1 satisfying
         // > GCD(e,\lambda(n)) = 1, where \lambda(n) = LCM(r_1 - 1, ..., r_u - 1)
-        const e_v = self.e.toPrimitive(u32) catch return error.Exponent;
-        if (!self.e.isOdd()) return error.Exponent;
-        if (e_v < 2) return error.PublicExponentTooSmall;
-        if (self.n.v.compare(self.e.v) == .lt) return error.Exponent;
+        const e_v = self.e.toPrimitive(u32) catch return error.RsaExponent;
+        if (!self.e.isOdd()) return error.RsaExponent;
+        if (e_v < 2) return error.RsaPublicExponentTooSmall;
+        if (self.n.v.compare(self.e.v) == .lt) return error.RsaExponent;
     }
 };
 
@@ -219,7 +219,7 @@ pub const SecretKey = struct {
         const prime2 = try parser.expectPrimitive(.integer);
 
         if (version > 1) {
-            return error.InvalidVersion;
+            return error.RsaInvalidVersion;
         }
 
         const n = parser.view(mod);
@@ -282,7 +282,7 @@ pub const SecretKey = struct {
 
         const version = try parser.expectInt(u8);
         if (version != 0) {
-            return error.PKCS8VersionError;
+            return error.RsaPKCS8VersionError;
         }
 
         const oid_seq = try parser.expectSequence();
@@ -321,8 +321,8 @@ pub const SecretKey = struct {
 
         // > The RSA private exponent d is a positive integer less than n
         // > satisfying e * d == 1 (mod \lambda(n)),
-        if (!d.isOdd()) return error.Exponent;
-        if (d.v.compare(pubkey.n.v) != .lt) return error.Exponent;
+        if (!d.isOdd()) return error.RsaExponent;
+        if (d.v.compare(pubkey.n.v) != .lt) return error.RsaExponent;
 
         const primes = [_]Fe{ p, q };
 
@@ -375,7 +375,7 @@ pub const SecretKey = struct {
     // in the future.
     pub fn precompute(self: *Self, alloc: Allocator) !void {
         if (self.primes.len < 2) {
-            return error.InvalidKey;
+            return error.RsaInvalidKey;
         }
 
         if (self.primes.len > 2) {
@@ -438,7 +438,7 @@ pub const SecretKey = struct {
     // precompute CRTValue
     fn precomputeLegacy(self: *Self, alloc: Allocator) !void {
         if (self.primes.len < 2) {
-            return error.InvalidKey;
+            return error.RsaInvalidKey;
         }
 
         var bd = try utils.bigFromFe(alloc, self.d);
@@ -559,7 +559,7 @@ pub const KeyPair = struct {
 
     pub fn generate(alloc: Allocator, random: Random, bits: usize) !Self {
         if (bits < utils.min_modulus_bits or bits > utils.max_modulus_bits or bits % 2 != 0) {
-            return error.InvalidBits;
+            return error.RsaInvalidBits;
         }
 
         const e: u64 = 65537;
@@ -683,7 +683,7 @@ pub const KeyPair = struct {
     pub fn generateMultiPrimeKey(alloc: Allocator, random: Random, bits: usize, nprimes: usize) !Self {
         const e: u64 = 65537;
         if (nprimes < 2) {
-            return error.NrimesMustBeGeTwo;
+            return error.RsaNrimesMustBeGeTwo;
         }
 
         if (bits < 64) {
@@ -694,7 +694,7 @@ pub const KeyPair = struct {
 
             const nprimes2: f64 = @floatFromInt(nprimes);
             if (pi <= nprimes2) {
-                return error.TooFewPrimes;
+                return error.RsaTooFewPrimes;
             }
         }
 
@@ -888,19 +888,6 @@ fn checkRSAPublickeyOid(oid: []const u8) !void {
     return;
 }
 
-// OAEPOptions corresponds to options for OAEP decryption.
-pub const OAEPOptions = struct {
-    // hash is the hash function that will be used when generating the mask.
-    hash: type,
-
-    // mgf_hash is the hash function used for MGF1.
-    mgf_hash: ?type = null,
-
-    // label is an arbitrary byte string that must be equal to the value
-    // used when encrypting.
-    label: []const u8 = "",
-};
-
 pub const Crypt = struct {
     const CryptT = @This();
 
@@ -933,18 +920,18 @@ pub const Crypt = struct {
             // calculated, which should match the original ciphertext.
             const c2 = try n.powPublic(m, secret_key.public_key.e);
             if (!c.eql(c2)) {
-                return error.InternalError;
+                return error.RsaInternalError;
             }
         }
 
         return out;
     }
 
-    pub fn decrypt_without_check(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]u8 {
+    pub fn decryptWithoutCheck(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]u8 {
         return CryptT.decrypt(alloc, secret_key, ciphertext, false);
     }
 
-    pub fn decrypt_with_check(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]u8 {
+    pub fn decryptWithCheck(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]u8 {
         return CryptT.decrypt(alloc, secret_key, ciphertext, true);
     }
 
@@ -975,55 +962,31 @@ pub const Crypt = struct {
 
     pub const Padding = struct {
         pub fn noPad(alloc: Allocator, em_len: usize, msg: []const u8) ![]const u8 {
-            if (em_len != msg.len) {
-                return error.MsgLengthError;
+            if (msg.len > em_len) {
+                return error.RsaMsgTooLargeForKeySize;
+            }
+            if (msg.len < em_len) {
+                return error.RsaMsgTooSmallForKeySize;
             }
 
             const out = try alloc.dupe(u8, msg);
             return out;
         }
 
-        pub fn noUnpad(alloc: Allocator, em: []const u8) ![]const u8 {
+        pub fn noUnpad(alloc: Allocator, k: usize, em: []const u8) ![]const u8 {
+            if (k != em.len) {
+                return error.RsaErrDecryption;
+            }
+
             const out = try alloc.dupe(u8, em);
             return out;
         }
 
-        pub fn pkcs1Type1Pad(alloc: Allocator, random: Random, em_len: usize, msg: []const u8) ![]const u8 {
-            // EM = 0x00 || 0x02 || PS || 0x00 || M.
-            var em = try alloc.alloc(u8, em_len);
-
-            em[0] = 0;
-            em[1] = 2;
-
-            const ps = em[2..][0 .. em_len - msg.len - 3];
-
-            // Section: 7.2.1
-            // PS consists of pseudo-randomly generated nonzero octets.
-            for (ps) |*v| {
-                v.* = random.uintLessThan(u8, 0xff) + 1;
+        pub fn pkcs1Type1Pad(alloc: Allocator, em_len: usize, msg: []const u8) ![]const u8 {
+            if (msg.len > em_len - 11) {
+                return error.ErrMessageTooLong;
             }
 
-            em[em.len - msg.len - 1] = 0;
-            @memcpy(em[em.len - msg.len ..][0..msg.len], msg);
-
-            return em;
-        }
-
-        pub fn pkcs1Type1Unpad(alloc: Allocator, em: []const u8) ![]const u8 {
-            // Care shall be taken to ensure that an opponent cannot
-            // distinguish these error conditions, whether by error
-            // message or timing.
-            const msg_start = ct.lastIndexOfScalar(em, 0) orelse em.len;
-            const ps_len = em.len - msg_start;
-            if (ct.@"or"(em[0] != 0, ct.@"or"(em[1] != 2, ps_len < 8))) {
-                return error.Inconsistent;
-            }
-
-            const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
-            return out;
-        }
-
-        pub fn pkcs1Type2Pad(alloc: Allocator, em_len: usize, msg: []const u8) ![]const u8 {
             // EM = 0x00 || 0x01 || PS || 0x00 || M.
             var em = try alloc.alloc(u8, em_len);
 
@@ -1040,9 +1003,13 @@ pub const Crypt = struct {
             return em;
         }
 
-        pub fn pkcs1Type2Unpad(alloc: Allocator, em: []const u8) ![]const u8 {
+        pub fn pkcs1Type1Unpad(alloc: Allocator, k: usize, em: []const u8) ![]const u8 {
+            if (k < 11) {
+                return error.RsaErrDecryption;
+            }
+
             if (ct.@"or"(em[0] != 0, ct.@"and"(em[1] != 0, em[1] != 1))) {
-                return error.Inconsistent;
+                return error.RsaInconsistent;
             }
 
             var i: usize = 2;
@@ -1063,10 +1030,53 @@ pub const Crypt = struct {
             }
 
             if (i - 1 < 8) {
-                return error.Inconsistent;
+                return error.RsaInconsistent;
             }
 
             const out = try alloc.dupe(u8, em[i..]);
+            return out;
+        }
+
+        pub fn pkcs1Type2Pad(alloc: Allocator, random: Random, em_len: usize, msg: []const u8) ![]const u8 {
+            if (msg.len > em_len - 11) {
+                return error.ErrMessageTooLong;
+            }
+
+            // EM = 0x00 || 0x02 || PS || 0x00 || M.
+            var em = try alloc.alloc(u8, em_len);
+
+            em[0] = 0;
+            em[1] = 2;
+
+            const ps = em[2..][0 .. em_len - msg.len - 3];
+
+            // Section: 7.2.1
+            // PS consists of pseudo-randomly generated nonzero octets.
+            for (ps) |*v| {
+                v.* = random.uintLessThan(u8, 0xff) + 1;
+            }
+
+            em[em.len - msg.len - 1] = 0;
+            @memcpy(em[em.len - msg.len ..][0..msg.len], msg);
+
+            return em;
+        }
+
+        pub fn pkcs1Type2Unpad(alloc: Allocator, k: usize, em: []const u8) ![]const u8 {
+            if (k < 11) {
+                return error.RsaErrDecryption;
+            }
+
+            // Care shall be taken to ensure that an opponent cannot
+            // distinguish these error conditions, whether by error
+            // message or timing.
+            const msg_start = ct.lastIndexOfScalar(em, 0) orelse em.len;
+            const ps_len = em.len - msg_start;
+            if (ct.@"or"(em[0] != 0, ct.@"or"(em[1] != 2, ps_len < 8))) {
+                return error.RsaInconsistent;
+            }
+
+            const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
             return out;
         }
 
@@ -1075,7 +1085,7 @@ pub const Crypt = struct {
 
             const j = em_len - msg.len - 2;
             if (j < 0) {
-                error.MsgTooLarge;
+                return error.RsaMsgTooLarge;
             }
 
             if (j == 0) {
@@ -1083,10 +1093,9 @@ pub const Crypt = struct {
             } else {
                 em[0] = 0x6b;
                 if (j > 1) {
-                    const ps = em[1..][0 .. j - 1];
-                    @memset(ps[0..], 0xbb);
+                    @memset(em[1..j], 0xbb);
                 }
-                em[j - 1] = 0xba;
+                em[j] = 0xba;
             }
 
             @memcpy(em[em.len - msg.len - 1 ..][0..msg.len], msg);
@@ -1095,12 +1104,16 @@ pub const Crypt = struct {
             return em;
         }
 
-        pub fn x931Unpad(alloc: Allocator, em: []const u8) ![]const u8 {
+        pub fn x931Unpad(alloc: Allocator, k: usize, em: []const u8) ![]const u8 {
+            if (k < 2) {
+                return error.RsaErrDecryption;
+            }
+
             var i: usize = 0;
             var j: usize = 0;
 
             if (em[0] != 0x6a and em[0] != 0x6b) {
-                return error.InvalidHeader;
+                return error.RsaInvalidHeader;
             }
 
             if (em[0] == 0x6b) {
@@ -1113,29 +1126,25 @@ pub const Crypt = struct {
                     }
 
                     if (em[i + 1] != 0xbb) {
-                        return error.InvalidPadding;
+                        return error.RsaInvalidPadding;
                     }
                 }
 
                 j -= i;
-
-                if (i == 0) {
-                    return error.InvalidPadding;
-                }
             } else {
                 j = em.len - 2;
             }
 
             if (em[em.len - 1] != 0xcc) {
-                return error.InvalidTrailer;
+                return error.RsaInvalidTrailer;
             }
 
-            const out = try alloc.dupe(u8, em[em.len - j .. em.len - 1]);
+            const out = try alloc.dupe(u8, em[em.len - j - 1 .. em.len - 1]);
             return out;
         }
     };
 
-    pub const Pkcs1v15 = struct {
+    pub const Encrypter = struct {
         pub const RsaPadding = enum {
             pkcs1_padding,
             x931_padding,
@@ -1146,13 +1155,12 @@ pub const Crypt = struct {
             padding: RsaPadding = .pkcs1_padding,
         };
 
-        /// encrypt a short message using RSAES-PKCS1-v1_5.
         pub fn encrypt(alloc: Allocator, random: Random, public_key: PublicKey, msg: []const u8, opts: Options) ![]const u8 {
             // align variable names with spec
             const k = public_key.size();
 
             const em = switch (opts.padding) {
-                .pkcs1_padding => try Padding.pkcs1Type1Pad(alloc, random, k, msg),
+                .pkcs1_padding => try Padding.pkcs1Type2Pad(alloc, random, k, msg),
                 .x931_padding => try Padding.x931Pad(alloc, k, msg),
                 .no_padding => try Padding.noPad(alloc, k, msg),
             };
@@ -1162,25 +1170,25 @@ pub const Crypt = struct {
             return out;
         }
 
-        /// decrypt a encrtpted message using RSAES-PKCS1-v1_5.
         pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8, opts: Options) ![]const u8 {
-            const em = try CryptT.decrypt_without_check(alloc, secret_key, ciphertext);
+            const em = try CryptT.decryptWithoutCheck(alloc, secret_key, ciphertext);
             defer alloc.free(em);
 
+            const k = secret_key.public_key.size();
+
             const out = switch (opts.padding) {
-                .pkcs1_padding => try Padding.pkcs1Type1Unpad(alloc, em),
-                .x931_padding => try Padding.x931Unpad(alloc, em),
-                .no_padding => try Padding.noUnpad(alloc, em),
+                .pkcs1_padding => try Padding.pkcs1Type2Unpad(alloc, k, em),
+                .x931_padding => try Padding.x931Unpad(alloc, k, em),
+                .no_padding => try Padding.noUnpad(alloc, k, em),
             };
             return out;
         }
 
-        /// encryptSecretKey a short message using RSAES-PKCS1-v1_5.
         pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, msg: []const u8, opts: Options) ![]const u8 {
             const k = secret_key.public_key.size();
 
             const em = switch (opts.padding) {
-                .pkcs1_padding => try Padding.pkcs1Type2Pad(alloc, k, msg),
+                .pkcs1_padding => try Padding.pkcs1Type1Pad(alloc, k, msg),
                 .x931_padding => try Padding.x931Pad(alloc, k, msg),
                 .no_padding => try Padding.noPad(alloc, k, msg),
             };
@@ -1190,21 +1198,69 @@ pub const Crypt = struct {
             return out;
         }
 
-        /// decryptPublicKey a encrtpted message using RSAES-PKCS1-v1_5.
         pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8, opts: Options) ![]const u8 {
             const em = try CryptT.decryptPublicKey(alloc, public_key, ciphertext);
             defer alloc.free(em);
 
+            const k = public_key.size();
+
             const out = switch (opts.padding) {
-                .pkcs1_padding => try Padding.pkcs1Type2Unpad(alloc, em),
-                .x931_padding => try Padding.x931Unpad(alloc, em),
-                .no_padding => try Padding.noUnpad(alloc, em),
+                .pkcs1_padding => try Padding.pkcs1Type1Unpad(alloc, k, em),
+                .x931_padding => try Padding.x931Unpad(alloc, k, em),
+                .no_padding => try Padding.noUnpad(alloc, k, em),
             };
             return out;
         }
     };
 
+    pub const Pkcs1v15 = struct {
+        /// encrypt a short message using RSAES-PKCS1-v1_5.
+        pub fn encrypt(alloc: Allocator, random: Random, public_key: PublicKey, msg: []const u8) ![]const u8 {
+            const out = try CryptT.Encrypter.encrypt(alloc, random, public_key, msg, .{
+                .padding = .pkcs1_padding,
+            });
+            return out;
+        }
+
+        /// decrypt a encrtpted message using RSAES-PKCS1-v1_5.
+        pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
+            const out = try CryptT.Encrypter.decrypt(alloc, secret_key, ciphertext, .{
+                .padding = .pkcs1_padding,
+            });
+            return out;
+        }
+
+        /// encryptSecretKey a short message using RSAES-PKCS1-v1_5.
+        pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, msg: []const u8) ![]const u8 {
+            const out = try CryptT.Encrypter.encryptSecretKey(alloc, secret_key, msg, .{
+                .padding = .pkcs1_padding,
+            });
+            return out;
+        }
+
+        /// decryptPublicKey a encrtpted message using RSAES-PKCS1-v1_5.
+        pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8) ![]const u8 {
+            const out = try CryptT.Encrypter.decryptPublicKey(alloc, public_key, ciphertext, .{
+                .padding = .pkcs1_padding,
+            });
+            return out;
+        }
+    };
+
     pub const Oaep = struct {
+        // Options corresponds to options for OAEP decryption.
+        pub const Options = struct {
+            // hash is the hash function that will be used when generating the mask.
+            hash: type,
+
+            // mgf_hash is the hash function used for MGF1.
+            mgf_hash: ?type = null,
+
+            // label is an arbitrary byte string that must be equal to the value
+            // used when encrypting.
+            label: []const u8 = "",
+        };
+
         const Self = @This();
 
         /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
@@ -1234,7 +1290,7 @@ pub const Crypt = struct {
             random: Random,
             public_key: PublicKey,
             msg: []const u8,
-            opts: OAEPOptions,
+            opts: Options,
         ) ![]const u8 {
             if (opts.mgf_hash) |mgf_hash| {
                 return Self.encryptInternal(alloc, random, public_key, opts.hash, mgf_hash, msg, opts.label);
@@ -1247,7 +1303,7 @@ pub const Crypt = struct {
             alloc: Allocator,
             secret_key: SecretKey,
             ciphertext: []const u8,
-            opts: OAEPOptions,
+            opts: Options,
         ) ![]u8 {
             if (opts.mgf_hash) |mgf_hash| {
                 return Self.decryptInternal(alloc, secret_key, opts.hash, mgf_hash, ciphertext, opts.label);
@@ -1272,7 +1328,7 @@ pub const Crypt = struct {
             const digest_size = Hash.digest_length;
 
             if (msg.len > k - 2 * digest_size - 2) {
-                return error.MessageTooLong;
+                return error.RsaMessageTooLong;
             }
 
             // EM = 0x00 || maskedSeed || maskedDB.
@@ -1314,7 +1370,7 @@ pub const Crypt = struct {
         ) ![]u8 {
             const digest_size = Hash.digest_length;
 
-            const em = try CryptT.decrypt_without_check(alloc, secret_key, ciphertext);
+            const em = try CryptT.decryptWithoutCheck(alloc, secret_key, ciphertext);
             defer alloc.free(em);
 
             const y = em[0];
@@ -1337,7 +1393,7 @@ pub const Crypt = struct {
             // message or timing.
             const msg_start = ct.indexOfScalarPos(em, expected_hash.len + 1, 1) orelse 0;
             if (ct.@"or"(y != 0, ct.@"or"(msg_start == 0, !ct.memEql(expected_hash, actual_hash)))) {
-                return error.Inconsistent;
+                return error.RsaInconsistent;
             }
 
             const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
@@ -1461,7 +1517,7 @@ pub fn PKCS1v15(comptime H: type) type {
                 const em = try PkcsT.emsaEncode(self.alloc, pk, prefix, &msg_hash);
                 defer self.alloc.free(em);
 
-                const sig = try Crypt.decrypt_with_check(self.alloc, self.secret_key, em);
+                const sig = try Crypt.decryptWithCheck(self.alloc, self.secret_key, em);
 
                 const siged = PkcsT.Signature.fromBytes(sig);
                 return siged;
@@ -1508,7 +1564,7 @@ pub fn PKCS1v15(comptime H: type) type {
                 defer self.alloc.free(expected);
 
                 if (!std.mem.eql(u8, expected, em)) {
-                    return error.VerifyFail;
+                    return error.RsaVerifyFail;
                 }
             }
 
@@ -1526,7 +1582,7 @@ pub fn PKCS1v15(comptime H: type) type {
             const em = try PkcsT.emsaEncode(alloc, pk, &[_]u8{}, msg);
             defer alloc.free(em);
 
-            const sig = try Crypt.decrypt_with_check(alloc, secret_key, em);
+            const sig = try Crypt.decryptWithCheck(alloc, secret_key, em);
             return sig;
         }
 
@@ -1538,7 +1594,7 @@ pub fn PKCS1v15(comptime H: type) type {
             defer alloc.free(expected);
 
             if (!std.mem.eql(u8, expected, em)) {
-                return error.VerifyFail;
+                return error.RsaVerifyFail;
             }
         }
 
@@ -1546,7 +1602,7 @@ pub fn PKCS1v15(comptime H: type) type {
         fn emsaEncode(alloc: Allocator, public_key: PublicKey, prefix: []const u8, hashed: []const u8) ![]u8 {
             const k = public_key.size();
             if (k < prefix.len + hashed.len + 2 + 8 + 1) {
-                return error.MessageTooLong;
+                return error.RsaMessageTooLong;
             }
 
             var em = try alloc.alloc(u8, k);
@@ -1764,10 +1820,10 @@ pub fn Pss(comptime H: type) type {
 
                 const k = self.secret_key.public_key.size();
                 if (em.len > k) {
-                    return error.MessageTooLong;
+                    return error.RsaMessageTooLong;
                 }
 
-                const sig = try Crypt.decrypt_with_check(self.alloc, self.secret_key, em);
+                const sig = try Crypt.decryptWithCheck(self.alloc, self.secret_key, em);
 
                 const siged = PssT.Signature.fromBytes(sig);
                 return siged;
@@ -1841,11 +1897,11 @@ pub fn Pss(comptime H: type) type {
 
             const digest_size = hash.digest_length;
             if (msg_hash.len != digest_size) {
-                return error.InputLongthError;
+                return error.RsaInputLongthError;
             }
 
             if (em_len < digest_size + s_len + 2) {
-                return error.MsgTooLong;
+                return error.RsaMsgTooLong;
             }
 
             // EM = maskedDB || H || 0xbc
@@ -1899,7 +1955,7 @@ pub fn Pss(comptime H: type) type {
             // All the cryptographic hash functions in the standard library have a limit of >= 2^61 - 1.
             // Even then, this check is only there for paranoia. In the context of TLS certificates, emBit cannot exceed 4096.
             if (em_bits >= 1 << 61) {
-                return error.InvalidSignature;
+                return error.RsaInvalidSignature;
             }
 
             // emLen = \ceil(emBits/8)
@@ -1909,18 +1965,18 @@ pub fn Pss(comptime H: type) type {
             // 2.   Let mHash = Hash(M), an octet string of length hLen.
             const hlen = digest_size;
             if (hlen != m_hash.len) {
-                return error.InvalidSignature;
+                return error.RsaInvalidSignature;
             }
 
             // 3.   If emLen < hLen + sLen + 2, output "inconsistent" and stop.
             if (em_len < digest_size + s_len + 2) {
-                return error.InvalidSignature;
+                return error.RsaInvalidSignature;
             }
 
             // 4.   If the rightmost octet of EM does not have hexadecimal value
             //      0xbc, output "inconsistent" and stop.
             if (em[em.len - 1] != 0xbc) {
-                return error.InvalidSignature;
+                return error.RsaInvalidSignature;
             }
 
             // 5.   Let maskedDB be the leftmost emLen - hLen - 1 octets of EM,
@@ -1938,14 +1994,14 @@ pub fn Pss(comptime H: type) type {
                 mask = mask >> 1;
             }
             if (mask != 0) {
-                return error.InvalidSignature;
+                return error.RsaInvalidSignature;
             }
 
             // 7.   Let dbMask = MGF(H, emLen - hLen - 1).
             const mgf_len = em_len - digest_size - 1;
             var mgf_out_buf: [512]u8 = undefined;
             if (mgf_len > mgf_out_buf.len) { // Modulus > 4096 bits
-                return error.InvalidSignature;
+                return error.RsaInvalidSignature;
             }
 
             const mgf_out = mgf_out_buf[0 .. ((mgf_len - 1) / digest_size + 1) * digest_size];
@@ -1972,7 +2028,7 @@ pub fn Pss(comptime H: type) type {
                 if (std.mem.indexOfScalar(u8, db_mask, 0x01)) |ps_len| {
                     s_len = db_mask.len - ps_len - 1;
                 } else {
-                    return error.ErrorVerification;
+                    return error.RsaErrorVerification;
                 }
             }
 
@@ -1983,12 +2039,12 @@ pub fn Pss(comptime H: type) type {
             const ps_len = em_len - digest_size - s_len - 2;
             for (db_mask[0..ps_len]) |e| {
                 if (e != 0x00) {
-                    return error.InvalidSignature;
+                    return error.RsaInvalidSignature;
                 }
             }
 
             if (db_mask[ps_len] != 0x01) {
-                return error.InvalidSignature;
+                return error.RsaInvalidSignature;
             }
 
             // 11.  Let salt be the last sLen octets of DB.
@@ -2009,7 +2065,7 @@ pub fn Pss(comptime H: type) type {
             // 14.  If H = H', output "consistent".  Otherwise, output
             //      "inconsistent".
             if (!std.mem.eql(u8, h, &h_p)) {
-                return error.InvalidSignature;
+                return error.RsaInvalidSignature;
             }
         }
     };
@@ -2031,36 +2087,32 @@ pub fn encryptPkcs1v15(
     random: Random,
     public_key: PublicKey,
     msg: []const u8,
-    opts: Crypt.Pkcs1v15.Options,
 ) ![]const u8 {
-    return Crypt.Pkcs1v15.encrypt(alloc, random, public_key, msg, opts);
+    return Crypt.Pkcs1v15.encrypt(alloc, random, public_key, msg);
 }
 
 pub fn decryptPkcs1v15(
     alloc: Allocator,
     secret_key: SecretKey,
     ciphertext: []const u8,
-    opts: Crypt.Pkcs1v15.Options,
 ) ![]const u8 {
-    return Crypt.Pkcs1v15.decrypt(alloc, secret_key, ciphertext, opts);
+    return Crypt.Pkcs1v15.decrypt(alloc, secret_key, ciphertext);
 }
 
 pub fn encryptSecretKeyPkcs1v15(
     alloc: Allocator,
     secret_key: SecretKey,
     msg: []const u8,
-    opts: Crypt.Pkcs1v15.Options,
 ) ![]const u8 {
-    return Crypt.Pkcs1v15.encryptSecretKey(alloc, secret_key, msg, opts);
+    return Crypt.Pkcs1v15.encryptSecretKey(alloc, secret_key, msg);
 }
 
 pub fn decryptPublicKeyPkcs1v15(
     alloc: Allocator,
     public_key: PublicKey,
     ciphertext: []const u8,
-    opts: Crypt.Pkcs1v15.Options,
 ) ![]const u8 {
-    return Crypt.Pkcs1v15.decryptPublicKey(alloc, public_key, ciphertext, opts);
+    return Crypt.Pkcs1v15.decryptPublicKey(alloc, public_key, ciphertext);
 }
 
 /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
@@ -2091,7 +2143,7 @@ pub fn encryptOaepWithOptions(
     random: Random,
     public_key: PublicKey,
     msg: []const u8,
-    opts: OAEPOptions,
+    opts: Crypt.Oaep.Options,
 ) ![]const u8 {
     return Crypt.Oaep.encryptWithOptions(alloc, random, public_key, msg, opts);
 }
@@ -2100,7 +2152,7 @@ pub fn decryptOaepWithOptions(
     alloc: Allocator,
     secret_key: SecretKey,
     ciphertext: []const u8,
-    opts: OAEPOptions,
+    opts: Crypt.Oaep.Options,
 ) ![]const u8 {
     return Crypt.Oaep.decryptWithOptions(alloc, secret_key, ciphertext, opts);
 }
