@@ -941,18 +941,18 @@ pub const Crypt = struct {
         var c = try n.powPublic(m, secret_key.d);
 
         if (opts.padding == .x931_padding) {
-            const nn = try utils.bigFromModulus(n);
-            const cc = try utils.bigFromFe(c);
+            var nn = try utils.bigFromModulus(alloc, n);
+            var cc = try utils.bigFromFe(alloc, c);
 
             var f = try utils.newBig(alloc);
-            f.sub(nn.toConst(), cc.toConst());
+            try f.sub(&nn, &cc);
 
             defer nn.deinit();
             defer cc.deinit();
             defer f.deinit();
 
             if (f.order(cc) == .lt) {
-                c = try utils.feFromBig(f);
+                c = try utils.feFromBig(n, &f);
             }
         }
 
@@ -969,10 +969,10 @@ pub const Crypt = struct {
         const k = public_key.size();
 
         const c = try Fe.fromBytes(n, ciphertext, .big);
-        const m = try n.pow(c, public_key.e);
+        var m = try n.pow(c, public_key.e);
 
-        const bigint16 = try utils.bigFromInt(16);
-        const mm = try utils.bigFromFe(m);
+        var bigint16 = try utils.bigFromInt(alloc, 16);
+        var mm = try utils.bigFromFe(alloc, m);
 
         var quot = try utils.newBig(alloc);
         var m2 = try utils.newBig(alloc);
@@ -985,15 +985,15 @@ pub const Crypt = struct {
 
         const m2int = try m2.toInt(i32);
         if ((opts.padding == .x931_padding) and (m2int != 12)) {
-            const nn = try utils.bigFromModulus(n);
+            var nn = try utils.bigFromModulus(alloc, n);
 
             var f = try utils.newBig(alloc);
-            f.sub(nn.toConst(), mm.toConst());
+            try f.sub(&nn, &mm);
 
             defer nn.deinit();
             defer f.deinit();
 
-            m = try utils.feFromBig(f);
+            m = try utils.feFromBig(n, &f);
         }
 
         const out = try alloc.alloc(u8, k);
