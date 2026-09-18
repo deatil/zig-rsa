@@ -971,16 +971,19 @@ pub const Crypt = struct {
         const c = try Fe.fromBytes(n, ciphertext, .big);
         var m = try n.pow(c, public_key.e);
 
-        var bigint16 = try utils.bigFromInt(alloc, 16);
+        var bigint15 = try utils.bigFromInt(alloc, 0xf);
         var mm = try utils.bigFromFe(alloc, m);
-        var m2 = try utils.bigMod(alloc, &mm, &bigint16);
 
-        defer bigint16.deinit();
+        var mLast4bit = try utils.newBig(alloc);
+        try mLast4bit.bitAnd(&mm, &bigint15);
+
+        defer bigint15.deinit();
         defer mm.deinit();
-        defer m2.deinit();
+        defer mLast4bit.deinit();
 
-        const m2int = try m2.toInt(i32);
-        if ((opts.padding == .x931_padding) and (m2int != 12)) {
+        // it is true if (m & 0xf) != 12
+        const mLast4bitInt = try mLast4bit.toInt(i32);
+        if ((opts.padding == .x931_padding) and (mLast4bitInt != 12)) {
             var nn = try utils.bigFromModulus(alloc, n);
 
             var f = try utils.newBig(alloc);
