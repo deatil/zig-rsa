@@ -973,14 +973,10 @@ pub const Crypt = struct {
 
         var bigint16 = try utils.bigFromInt(alloc, 16);
         var mm = try utils.bigFromFe(alloc, m);
-
-        var quot = try utils.newBig(alloc);
-        var m2 = try utils.newBig(alloc);
-        try quot.divFloor(&m2, &mm, &bigint16);
+        var m2 = try utils.bigMod(alloc, &mm, &bigint16);
 
         defer bigint16.deinit();
         defer mm.deinit();
-        defer quot.deinit();
         defer m2.deinit();
 
         const m2int = try m2.toInt(i32);
@@ -1205,7 +1201,7 @@ pub const Crypt = struct {
                 .pkcs1_padding => try Padding.pkcs1Type2Pad(alloc, random, k, msg),
                 .no_padding => try Padding.noPad(alloc, k, msg),
                 else => {
-                    return error.RsaPaddingNotSupported;
+                    return error.RsaPaddingNotSupport;
                 },
             };
             defer alloc.free(em);
@@ -1224,7 +1220,7 @@ pub const Crypt = struct {
                 .pkcs1_padding => try Padding.pkcs1Type2Unpad(alloc, k, em),
                 .no_padding => try Padding.noUnpad(alloc, k, em),
                 else => {
-                    return error.RsaPaddingNotSupported;
+                    return error.RsaPaddingNotSupport;
                 },
             };
             return out;

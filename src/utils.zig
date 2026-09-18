@@ -104,6 +104,19 @@ pub fn modulusFromBig(x: *const BigInt) !Modulus {
     return Modulus.fromBytes(&buf, .big);
 }
 
+// rem = e % m
+pub fn bigMod(alloc: Allocator, e: *const BigInt, m: *const BigInt) !BigInt {
+    var quot = try newBig(alloc);
+    var rem = try newBig(alloc);
+
+    try quot.divFloor(&rem, e, m);
+
+    defer quot.deinit();
+
+    return rem;
+}
+
+// rem = e^-1 % m
 pub fn bigModInverse(alloc: Allocator, e: *const BigInt, m: *const BigInt) !BigInt {
     // Invariants: t0*e ≡ r0, t1*e ≡ r1 (mod m).
     var r0 = try newBig(alloc);
