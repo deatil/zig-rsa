@@ -1149,7 +1149,7 @@ pub const Crypt = struct {
 
             // DB = lHash || PS || 0x01 || M.
             var db = em[1 + seed.len ..];
-            const lHash = labelOaepHash(Hash, label);
+            const lHash = oaepLabelHash(Hash, label);
             @memcpy(db[0..lHash.len], lHash);
             @memset(db[lHash.len .. db.len - msg.len - 2], 0);
             db[db.len - msg.len - 1] = 1;
@@ -1192,7 +1192,7 @@ pub const Crypt = struct {
             const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
             for (db, db_mask) |*v, m| v.* ^= m;
 
-            const expected_hash = labelOaepHash(Hash, label);
+            const expected_hash = oaepLabelHash(Hash, label);
             const actual_hash = db[0..expected_hash.len];
 
             // Care shall be taken to ensure that an opponent cannot
@@ -1207,7 +1207,7 @@ pub const Crypt = struct {
             return out;
         }
 
-        inline fn labelOaepHash(comptime Hash: type, label: []const u8) []const u8 {
+        inline fn oaepLabelHash(comptime Hash: type, label: []const u8) []const u8 {
             if (label.len == 0) {
                 // magic constants from NIST
                 return &switch (Hash) {
@@ -1326,7 +1326,7 @@ pub const Crypt = struct {
 
         pub const RsaPadding = enum {
             pkcs1_padding,
-            // oaep_padding,
+            oaep_padding,
             x931_padding,
             no_padding,
         };
@@ -1385,6 +1385,9 @@ pub const Crypt = struct {
                 .pkcs1_padding => try Padding.pkcs1Type1Pad(self.alloc, k, msg),
                 .x931_padding => try Padding.x931Pad(self.alloc, k, msg),
                 .no_padding => try Padding.noPad(self.alloc, k, msg),
+                else => {
+                    return error.RsaPaddingNotSupport;
+                },
             };
             defer self.alloc.free(em);
 
@@ -1402,6 +1405,9 @@ pub const Crypt = struct {
                 .pkcs1_padding => try Padding.pkcs1Type1Unpad(self.alloc, k, em),
                 .x931_padding => try Padding.x931Unpad(self.alloc, k, em),
                 .no_padding => try Padding.noUnpad(self.alloc, k, em),
+                else => {
+                    return error.RsaPaddingNotSupport;
+                },
             };
             return out;
         }
@@ -1524,6 +1530,11 @@ pub const Crypt = struct {
             // align variable names with spec
             const k = public_key.size();
 
+            const hash_size = Hash.digest_length;
+            if (msg.len > k - 2 * hash_size - 2) {
+                return error.RsaMessageTooLong;
+            }
+
             const em = try CryptT.Padding.oaepPad(alloc, random, Hash, MgfHash, k, msg, label);
             defer alloc.free(em);
 
@@ -1539,6 +1550,12 @@ pub const Crypt = struct {
             ciphertext: []const u8,
             label: []const u8,
         ) ![]u8 {
+            const k = secret_key.public_key.size();
+            const hash_size = Hash.digest_length;
+            if (ciphertext.len > k or k < (hash_size * 2 + 2)) {
+                return error.RsaErrDecryption;
+            }
+
             const em = try CryptT.decryptWithoutCheck(alloc, secret_key, ciphertext);
             defer alloc.free(em);
 
