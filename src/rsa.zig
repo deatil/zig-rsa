@@ -243,33 +243,36 @@ pub const SecretKey = struct {
         const qinv = try parser.expectPrimitive(.integer);
         _ = .{ dp, dq, qinv };
 
-        var primes = try alloc.alloc(Fe, 50);
-        defer alloc.free(primes);
+        var primes = try std.ArrayList(Fe).initCapacity(alloc, 0);
+        defer primes.deinit(alloc);
 
-        primes[0] = seckey.primes[0];
-        primes[1] = seckey.primes[1];
+        try primes.append(alloc, seckey.primes[0]);
+        try primes.append(alloc, seckey.primes[1]);
 
-        _ = try parser.expectSequence();
+        const crts_seq = try parser.expectSequence();
 
-        var index: usize = 2;
-        while (!parser.eof()) : (index += 1) {
-            const prime_seq = try parser.expectSequence();
+        var crts_parser = der.Parser{ 
+            .bytes = parser.view(crts_seq),
+        };
+
+        while (!crts_parser.eof()) {
+            const prime_seq = try crts_parser.expectSequence();
 
             // get crts first
-            const prime_int = try parser.expectPrimitive(.integer);
-            const prime_bytes = parser.view(prime_int);
+            const prime_int = try crts_parser.expectPrimitive(.integer);
+            const prime_bytes = crts_parser.view(prime_int);
 
             // crt_seq = [prime, exp, coeff]
             const prime = try Fe.fromBytes(seckey.public_key.n, prime_bytes, .big);
-            primes[index] = prime;
+            try primes.append(alloc, prime);
 
-            parser.seek(prime_seq.slice.end);
+            crts_parser.seek(prime_seq.slice.end);
         }
 
         var seckey2: Self = .{
             .public_key = seckey.public_key,
             .d = seckey.d,
-            .primes = try alloc.dupe(Fe, primes[0..index]),
+            .primes = try primes.toOwnedSlice(alloc),
         };
         try seckey2.precompute(alloc);
 
@@ -481,8 +484,8 @@ pub const SecretKey = struct {
             return error.RsaPrecomputeFail;
         }
 
-        var crts = try alloc.alloc(CRTValue, 50);
-        defer alloc.free(crts);
+        var crts = try std.ArrayList(CRTValue).initCapacity(alloc, 0);
+        defer crts.deinit(alloc);
 
         var r = try utils.newBig(alloc);
         try r.mul(&bp, &bq);
@@ -512,11 +515,11 @@ pub const SecretKey = struct {
 
             const rr = try utils.modulusFromBig(&r2);
 
-            crts[i - 2] = .{
+            try crts.append(alloc, .{
                 .exp = try utils.feFromBig(self.public_key.n, &exp),
                 .coeff = try utils.feFromBig(self.public_key.n, &coeff),
                 .r = try utils.feFromBig(rr, &r),
-            };
+            });
 
             try r.mul(&r, &prime);
         }
@@ -526,7 +529,7 @@ pub const SecretKey = struct {
             .dq = dq,
             .qinv = qinv,
 
-            .crt_values = try alloc.dupe(CRTValue, crts[0 .. self.primes.len - 2]),
+            .crt_values = try crts.toOwnedSlice(alloc),
         };
 
         self.precomputed = precomputed;
@@ -935,12 +938,12 @@ pub const Crypt = struct {
         return CryptT.decrypt(alloc, secret_key, ciphertext, true);
     }
 
-    pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, plaintext: []const u8, opts: Encrypter.Options) ![]const u8 {
+    pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, plaintext: []const u8, padding: Encrypter.RsaPadding) ![]const u8 {
         const n = secret_key.public_key.n;
         const m = try Fe.fromBytes(n, plaintext, .big);
         var c = try n.powPublic(m, secret_key.d);
 
-        if (opts.padding == .x931_padding) {
+        if (padding == .x931_padding) {
             var nn = try utils.bigFromModulus(alloc, n);
             var cc = try utils.bigFromFe(alloc, c);
 
@@ -964,7 +967,7 @@ pub const Crypt = struct {
         return out;
     }
 
-    pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8, opts: Encrypter.Options) ![]u8 {
+    pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8, padding: Encrypter.RsaPadding) ![]u8 {
         const n = public_key.n;
         const k = public_key.size();
 
@@ -983,7 +986,7 @@ pub const Crypt = struct {
 
         // it is true if (m & 0xf) != 12
         const mLast4bitInt = try mLast4bit.toInt(i32);
-        if ((opts.padding == .x931_padding) and (mLast4bitInt != 12)) {
+        if ((padding == .x931_padding) and (mLast4bitInt != 12)) {
             var nn = try utils.bigFromModulus(alloc, n);
 
             var f = try utils.newBig(alloc);
@@ -1121,6 +1124,131 @@ pub const Crypt = struct {
             return out;
         }
 
+        pub fn oaepPad(
+            alloc: Allocator,
+            random: Random,
+            comptime Hash: type,
+            comptime MgfHash: type,
+            em_len: usize,
+            msg: []const u8,
+            label: []const u8,
+        ) ![]const u8 {
+            const digest_size = Hash.digest_length;
+
+            if (msg.len > em_len - 2 * digest_size - 2) {
+                return error.RsaMessageTooLong;
+            }
+
+            // EM = 0x00 || maskedSeed || maskedDB.
+            var em = try alloc.alloc(u8, em_len);
+
+            em[0] = 0;
+            const seed = em[1..][0..digest_size];
+
+            random.bytes(seed);
+
+            // DB = lHash || PS || 0x01 || M.
+            var db = em[1 + seed.len ..];
+            const lHash = labelOaepHash(Hash, label);
+            @memcpy(db[0..lHash.len], lHash);
+            @memset(db[lHash.len .. db.len - msg.len - 2], 0);
+            db[db.len - msg.len - 1] = 1;
+            @memcpy(db[db.len - msg.len ..], msg);
+
+            var mgf_buf: [max_modulus_len]u8 = undefined;
+
+            const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
+            for (db, db_mask) |*v, m| v.* ^= m;
+
+            const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
+            for (seed, seed_mask) |*v, m| v.* ^= m;
+
+            return em;
+        }
+
+        pub fn oaepUnpad(
+            alloc: Allocator,
+            comptime Hash: type,
+            comptime MgfHash: type,
+            em_bytes: []const u8,
+            label: []const u8,
+        ) ![]u8 {
+            const digest_size = Hash.digest_length;
+
+            var em = try alloc.alloc(u8, em_bytes.len);
+            defer alloc.free(em);
+            
+            @memcpy(em[0..], em_bytes[0..]);
+
+            const y = em[0];
+            const seed = em[1..][0..digest_size];
+            const db = em[1 + digest_size ..];
+
+            var mgf_buf: [max_modulus_len]u8 = undefined;
+
+            const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
+            for (seed, seed_mask) |*v, m| v.* ^= m;
+
+            const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
+            for (db, db_mask) |*v, m| v.* ^= m;
+
+            const expected_hash = labelOaepHash(Hash, label);
+            const actual_hash = db[0..expected_hash.len];
+
+            // Care shall be taken to ensure that an opponent cannot
+            // distinguish these error conditions, whether by error
+            // message or timing.
+            const msg_start = ct.indexOfScalarPos(em, expected_hash.len + 1, 1) orelse 0;
+            if (ct.@"or"(y != 0, ct.@"or"(msg_start == 0, !ct.memEql(expected_hash, actual_hash)))) {
+                return error.RsaInconsistent;
+            }
+
+            const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
+            return out;
+        }
+
+        inline fn labelOaepHash(comptime Hash: type, label: []const u8) []const u8 {
+            if (label.len == 0) {
+                // magic constants from NIST
+                return &switch (Hash) {
+                    std.crypto.hash.Sha1 => .{
+                        0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d,
+                        0x32, 0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90,
+                        0xaf, 0xd8, 0x07, 0x09,
+                    },
+                    sha2.Sha256 => .{
+                        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
+                        0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+                        0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
+                        0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+                    },
+                    sha2.Sha384 => .{
+                        0x38, 0xb0, 0x60, 0xa7, 0x51, 0xac, 0x96, 0x38,
+                        0x4c, 0xd9, 0x32, 0x7e, 0xb1, 0xb1, 0xe3, 0x6a,
+                        0x21, 0xfd, 0xb7, 0x11, 0x14, 0xbe, 0x07, 0x43,
+                        0x4c, 0x0c, 0xc7, 0xbf, 0x63, 0xf6, 0xe1, 0xda,
+                        0x27, 0x4e, 0xde, 0xbf, 0xe7, 0x6f, 0x65, 0xfb,
+                        0xd5, 0x1a, 0xd2, 0xf1, 0x48, 0x98, 0xb9, 0x5b,
+                    },
+                    sha2.Sha512 => .{
+                        0xcf, 0x83, 0xe1, 0x35, 0x7e, 0xef, 0xb8, 0xbd,
+                        0xf1, 0x54, 0x28, 0x50, 0xd6, 0x6d, 0x80, 0x07,
+                        0xd6, 0x20, 0xe4, 0x05, 0x0b, 0x57, 0x15, 0xdc,
+                        0x83, 0xf4, 0xa9, 0x21, 0xd3, 0x6c, 0xe9, 0xce,
+                        0x47, 0xd0, 0xd1, 0x3c, 0x5d, 0x85, 0xf2, 0xb0,
+                        0xff, 0x83, 0x18, 0xd2, 0x87, 0x7e, 0xec, 0x2f,
+                        0x63, 0xb9, 0x31, 0xbd, 0x47, 0x41, 0x7a, 0x81,
+                        0xa5, 0x38, 0x32, 0x7a, 0xf9, 0x27, 0xda, 0x3e,
+                    },
+                    else => {},
+                };
+            }
+
+            var res: [Hash.digest_length]u8 = undefined;
+            Hash.hash(label, &res, .{});
+            return res[0..];
+        }
+
         pub fn x931Pad(alloc: Allocator, em_len: usize, msg: []const u8) ![]const u8 {
             var em = try alloc.alloc(u8, em_len);
 
@@ -1186,42 +1314,63 @@ pub const Crypt = struct {
     };
 
     pub const Encrypter = struct {
+        alloc: Allocator,
+
+        // encrypter for pkcs1Type2Pad, oaepPad
+        random: Random = undefined, 
+
+        // encrypter padding type
+        padding: RsaPadding = .pkcs1_padding,
+
+        const Self = @This();
+
         pub const RsaPadding = enum {
             pkcs1_padding,
+            // oaep_padding,
             x931_padding,
             no_padding,
         };
 
-        pub const Options = struct {
-            padding: RsaPadding = .pkcs1_padding,
-        };
+        pub fn init(alloc: Allocator) Self {
+            return .{
+                .alloc = alloc,
+            };
+        }
 
-        pub fn encrypt(alloc: Allocator, random: Random, public_key: PublicKey, msg: []const u8, opts: Options) ![]const u8 {
+        pub fn withRandom(self: *Self, random: Random) void {
+            self.random = random;
+        }
+
+        pub fn withPadding(self: *Self, padding: RsaPadding) void {
+            self.padding = padding;
+        }
+
+        pub fn encrypt(self: *Self, public_key: PublicKey, msg: []const u8) ![]const u8 {
             // align variable names with spec
             const k = public_key.size();
 
-            const em = switch (opts.padding) {
-                .pkcs1_padding => try Padding.pkcs1Type2Pad(alloc, random, k, msg),
-                .no_padding => try Padding.noPad(alloc, k, msg),
+            const em = switch (self.padding) {
+                .pkcs1_padding => try Padding.pkcs1Type2Pad(self.alloc, self.random, k, msg),
+                .no_padding => try Padding.noPad(self.alloc, k, msg),
                 else => {
                     return error.RsaPaddingNotSupport;
                 },
             };
-            defer alloc.free(em);
+            defer self.alloc.free(em);
 
-            const out = try CryptT.encrypt(alloc, public_key, em);
+            const out = try CryptT.encrypt(self.alloc, public_key, em);
             return out;
         }
 
-        pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8, opts: Options) ![]const u8 {
-            const em = try CryptT.decryptWithoutCheck(alloc, secret_key, ciphertext);
-            defer alloc.free(em);
+        pub fn decrypt(self: *Self, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
+            const em = try CryptT.decryptWithoutCheck(self.alloc, secret_key, ciphertext);
+            defer self.alloc.free(em);
 
             const k = secret_key.public_key.size();
 
-            const out = switch (opts.padding) {
-                .pkcs1_padding => try Padding.pkcs1Type2Unpad(alloc, k, em),
-                .no_padding => try Padding.noUnpad(alloc, k, em),
+            const out = switch (self.padding) {
+                .pkcs1_padding => try Padding.pkcs1Type2Unpad(self.alloc, k, em),
+                .no_padding => try Padding.noUnpad(self.alloc, k, em),
                 else => {
                     return error.RsaPaddingNotSupport;
                 },
@@ -1229,30 +1378,30 @@ pub const Crypt = struct {
             return out;
         }
 
-        pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, msg: []const u8, opts: Options) ![]const u8 {
+        pub fn encryptSecretKey(self: *Self, secret_key: SecretKey, msg: []const u8) ![]const u8 {
             const k = secret_key.public_key.size();
 
-            const em = switch (opts.padding) {
-                .pkcs1_padding => try Padding.pkcs1Type1Pad(alloc, k, msg),
-                .x931_padding => try Padding.x931Pad(alloc, k, msg),
-                .no_padding => try Padding.noPad(alloc, k, msg),
+            const em = switch (self.padding) {
+                .pkcs1_padding => try Padding.pkcs1Type1Pad(self.alloc, k, msg),
+                .x931_padding => try Padding.x931Pad(self.alloc, k, msg),
+                .no_padding => try Padding.noPad(self.alloc, k, msg),
             };
-            defer alloc.free(em);
+            defer self.alloc.free(em);
 
-            const out = try CryptT.encryptSecretKey(alloc, secret_key, em, opts);
+            const out = try CryptT.encryptSecretKey(self.alloc, secret_key, em, self.padding);
             return out;
         }
 
-        pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8, opts: Options) ![]const u8 {
-            const em = try CryptT.decryptPublicKey(alloc, public_key, ciphertext, opts);
-            defer alloc.free(em);
+        pub fn decryptPublicKey(self: *Self, public_key: PublicKey, ciphertext: []const u8) ![]const u8 {
+            const em = try CryptT.decryptPublicKey(self.alloc, public_key, ciphertext, self.padding);
+            defer self.alloc.free(em);
 
             const k = public_key.size();
 
-            const out = switch (opts.padding) {
-                .pkcs1_padding => try Padding.pkcs1Type1Unpad(alloc, k, em),
-                .x931_padding => try Padding.x931Unpad(alloc, k, em),
-                .no_padding => try Padding.noUnpad(alloc, k, em),
+            const out = switch (self.padding) {
+                .pkcs1_padding => try Padding.pkcs1Type1Unpad(self.alloc, k, em),
+                .x931_padding => try Padding.x931Unpad(self.alloc, k, em),
+                .no_padding => try Padding.noUnpad(self.alloc, k, em),
             };
             return out;
         }
@@ -1261,33 +1410,38 @@ pub const Crypt = struct {
     pub const Pkcs1v15 = struct {
         /// encrypt a short message using RSAES-PKCS1-v1_5.
         pub fn encrypt(alloc: Allocator, random: Random, public_key: PublicKey, msg: []const u8) ![]const u8 {
-            const out = try CryptT.Encrypter.encrypt(alloc, random, public_key, msg, .{
-                .padding = .pkcs1_padding,
-            });
+            var encrypter = CryptT.Encrypter.init(alloc);
+            encrypter.withRandom(random);
+            encrypter.withPadding(.pkcs1_padding);
+            
+            const out = try encrypter.encrypt(public_key, msg);
             return out;
         }
 
         /// decrypt a encrtpted message using RSAES-PKCS1-v1_5.
         pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
-            const out = try CryptT.Encrypter.decrypt(alloc, secret_key, ciphertext, .{
-                .padding = .pkcs1_padding,
-            });
+            var encrypter = CryptT.Encrypter.init(alloc);
+            encrypter.withPadding(.pkcs1_padding);
+            
+            const out = try encrypter.decrypt(secret_key, ciphertext);
             return out;
         }
 
         /// encryptSecretKey a short message using RSAES-PKCS1-v1_5.
         pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, msg: []const u8) ![]const u8 {
-            const out = try CryptT.Encrypter.encryptSecretKey(alloc, secret_key, msg, .{
-                .padding = .pkcs1_padding,
-            });
+            var encrypter = CryptT.Encrypter.init(alloc);
+            encrypter.withPadding(.pkcs1_padding);
+            
+            const out = try encrypter.encryptSecretKey(secret_key, msg);
             return out;
         }
 
         /// decryptPublicKey a encrtpted message using RSAES-PKCS1-v1_5.
         pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8) ![]const u8 {
-            const out = try CryptT.Encrypter.decryptPublicKey(alloc, public_key, ciphertext, .{
-                .padding = .pkcs1_padding,
-            });
+            var encrypter = CryptT.Encrypter.init(alloc);
+            encrypter.withPadding(.pkcs1_padding);
+            
+            const out = try encrypter.decryptPublicKey(public_key, ciphertext);
             return out;
         }
     };
@@ -1370,36 +1524,8 @@ pub const Crypt = struct {
             // align variable names with spec
             const k = public_key.size();
 
-            const digest_size = Hash.digest_length;
-
-            if (msg.len > k - 2 * digest_size - 2) {
-                return error.RsaMessageTooLong;
-            }
-
-            // EM = 0x00 || maskedSeed || maskedDB.
-            var em = try alloc.alloc(u8, k);
+            const em = try CryptT.Padding.oaepPad(alloc, random, Hash, MgfHash, k, msg, label);
             defer alloc.free(em);
-
-            em[0] = 0;
-            const seed = em[1..][0..digest_size];
-
-            random.bytes(seed);
-
-            // DB = lHash || PS || 0x01 || M.
-            var db = em[1 + seed.len ..];
-            const lHash = labelHash(Hash, label);
-            @memcpy(db[0..lHash.len], lHash);
-            @memset(db[lHash.len .. db.len - msg.len - 2], 0);
-            db[db.len - msg.len - 1] = 1;
-            @memcpy(db[db.len - msg.len ..], msg);
-
-            var mgf_buf: [max_modulus_len]u8 = undefined;
-
-            const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
-            for (db, db_mask) |*v, m| v.* ^= m;
-
-            const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
-            for (seed, seed_mask) |*v, m| v.* ^= m;
 
             const out = try CryptT.encrypt(alloc, public_key, em);
             return out;
@@ -1413,78 +1539,11 @@ pub const Crypt = struct {
             ciphertext: []const u8,
             label: []const u8,
         ) ![]u8 {
-            const digest_size = Hash.digest_length;
-
             const em = try CryptT.decryptWithoutCheck(alloc, secret_key, ciphertext);
             defer alloc.free(em);
 
-            const y = em[0];
-            const seed = em[1..][0..digest_size];
-            const db = em[1 + digest_size ..];
-
-            var mgf_buf: [max_modulus_len]u8 = undefined;
-
-            const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
-            for (seed, seed_mask) |*v, m| v.* ^= m;
-
-            const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
-            for (db, db_mask) |*v, m| v.* ^= m;
-
-            const expected_hash = labelHash(Hash, label);
-            const actual_hash = db[0..expected_hash.len];
-
-            // Care shall be taken to ensure that an opponent cannot
-            // distinguish these error conditions, whether by error
-            // message or timing.
-            const msg_start = ct.indexOfScalarPos(em, expected_hash.len + 1, 1) orelse 0;
-            if (ct.@"or"(y != 0, ct.@"or"(msg_start == 0, !ct.memEql(expected_hash, actual_hash)))) {
-                return error.RsaInconsistent;
-            }
-
-            const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
+            const out = try CryptT.Padding.oaepUnpad(alloc, Hash, MgfHash, em, label);
             return out;
-        }
-
-        inline fn labelHash(comptime Hash: type, label: []const u8) []const u8 {
-            if (label.len == 0) {
-                // magic constants from NIST
-                return &switch (Hash) {
-                    std.crypto.hash.Sha1 => .{
-                        0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d,
-                        0x32, 0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90,
-                        0xaf, 0xd8, 0x07, 0x09,
-                    },
-                    sha2.Sha256 => .{
-                        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
-                        0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
-                        0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
-                        0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
-                    },
-                    sha2.Sha384 => .{
-                        0x38, 0xb0, 0x60, 0xa7, 0x51, 0xac, 0x96, 0x38,
-                        0x4c, 0xd9, 0x32, 0x7e, 0xb1, 0xb1, 0xe3, 0x6a,
-                        0x21, 0xfd, 0xb7, 0x11, 0x14, 0xbe, 0x07, 0x43,
-                        0x4c, 0x0c, 0xc7, 0xbf, 0x63, 0xf6, 0xe1, 0xda,
-                        0x27, 0x4e, 0xde, 0xbf, 0xe7, 0x6f, 0x65, 0xfb,
-                        0xd5, 0x1a, 0xd2, 0xf1, 0x48, 0x98, 0xb9, 0x5b,
-                    },
-                    sha2.Sha512 => .{
-                        0xcf, 0x83, 0xe1, 0x35, 0x7e, 0xef, 0xb8, 0xbd,
-                        0xf1, 0x54, 0x28, 0x50, 0xd6, 0x6d, 0x80, 0x07,
-                        0xd6, 0x20, 0xe4, 0x05, 0x0b, 0x57, 0x15, 0xdc,
-                        0x83, 0xf4, 0xa9, 0x21, 0xd3, 0x6c, 0xe9, 0xce,
-                        0x47, 0xd0, 0xd1, 0x3c, 0x5d, 0x85, 0xf2, 0xb0,
-                        0xff, 0x83, 0x18, 0xd2, 0x87, 0x7e, 0xec, 0x2f,
-                        0x63, 0xb9, 0x31, 0xbd, 0x47, 0x41, 0x7a, 0x81,
-                        0xa5, 0x38, 0x32, 0x7a, 0xf9, 0x27, 0xda, 0x3e,
-                    },
-                    else => {},
-                };
-            }
-
-            var res: [Hash.digest_length]u8 = undefined;
-            Hash.hash(label, &res, .{});
-            return res[0..];
         }
     };
 };

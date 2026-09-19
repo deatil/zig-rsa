@@ -1697,8 +1697,10 @@ test "Encrypter encryptSecretKey" {
     const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
 
     {
-        const enc = try rsa.Crypt.Encrypter.encryptSecretKey(alloc, pri_key, msg, .{});
-        const dec = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc, .{});
+        var encrypter = rsa.Crypt.Encrypter.init(alloc);
+
+        const enc = try encrypter.encryptSecretKey(pri_key, msg);
+        const dec = try encrypter.decryptPublicKey(pub_key, enc);
 
         defer alloc.free(enc);
         defer alloc.free(dec);
@@ -1713,19 +1715,18 @@ test "Encrypter encryptSecretKey" {
         var enc2: [256]u8 = undefined;
         const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-        const dec2 = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc2_res, .{});
+        const dec2 = try encrypter.decryptPublicKey(pub_key, enc2_res);
         defer alloc.free(dec2);
 
         try testing.expectFmt(msg, "{s}", .{dec2});
     }
 
     {
-        const enc = try rsa.Crypt.Encrypter.encryptSecretKey(alloc, pri_key, msg, .{
-            .padding = .x931_padding,
-        });
-        const dec = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc, .{
-            .padding = .x931_padding,
-        });
+        var encrypter = rsa.Crypt.Encrypter.init(alloc);
+        encrypter.withPadding(.x931_padding);
+
+        const enc = try encrypter.encryptSecretKey(pri_key, msg);
+        const dec = try encrypter.decryptPublicKey(pub_key, enc);
 
         defer alloc.free(enc);
         defer alloc.free(dec);
@@ -1740,9 +1741,7 @@ test "Encrypter encryptSecretKey" {
         var enc2: [256]u8 = undefined;
         const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-        const dec2 = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc2_res, .{
-            .padding = .x931_padding,
-        });
+        const dec2 = try encrypter.decryptPublicKey(pub_key, enc2_res);
         defer alloc.free(dec2);
 
         try testing.expectFmt(msg, "{s}", .{dec2});
@@ -1751,12 +1750,11 @@ test "Encrypter encryptSecretKey" {
     {
         const msg2 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt and dec";
 
-        const enc = try rsa.Crypt.Encrypter.encryptSecretKey(alloc, pri_key, msg2, .{
-            .padding = .no_padding,
-        });
-        const dec = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc, .{
-            .padding = .no_padding,
-        });
+        var encrypter = rsa.Crypt.Encrypter.init(alloc);
+        encrypter.withPadding(.no_padding);
+
+        const enc = try encrypter.encryptSecretKey(pri_key, msg2);
+        const dec = try encrypter.decryptPublicKey(pub_key, enc);
 
         defer alloc.free(enc);
         defer alloc.free(dec);
@@ -1771,9 +1769,7 @@ test "Encrypter encryptSecretKey" {
         var enc2: [256]u8 = undefined;
         const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-        const dec2 = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc2_res, .{
-            .padding = .no_padding,
-        });
+        const dec2 = try encrypter.decryptPublicKey(pub_key, enc2_res);
         defer alloc.free(dec2);
 
         try testing.expectFmt(msg2, "{s}", .{dec2});
@@ -1782,12 +1778,11 @@ test "Encrypter encryptSecretKey" {
     {
         const msg3 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt andd";
 
-        const enc = try rsa.Crypt.Encrypter.encryptSecretKey(alloc, pri_key, msg3, .{
-            .padding = .x931_padding,
-        });
-        const dec = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc, .{
-            .padding = .x931_padding,
-        });
+        var encrypter = rsa.Crypt.Encrypter.init(alloc);
+        encrypter.withPadding(.x931_padding);
+
+        const enc = try encrypter.encryptSecretKey(pri_key, msg3);
+        const dec = try encrypter.decryptPublicKey(pub_key, enc);
 
         defer alloc.free(enc);
         defer alloc.free(dec);
@@ -1797,12 +1792,11 @@ test "Encrypter encryptSecretKey" {
     {
         const msg3 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt and d";
 
-        const enc = try rsa.Crypt.Encrypter.encryptSecretKey(alloc, pri_key, msg3, .{
-            .padding = .x931_padding,
-        });
-        const dec = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc, .{
-            .padding = .x931_padding,
-        });
+        var encrypter = rsa.Crypt.Encrypter.init(alloc);
+        encrypter.withPadding(.x931_padding);
+
+        const enc = try encrypter.encryptSecretKey(pri_key, msg3);
+        const dec = try encrypter.decryptPublicKey(pub_key, enc);
 
         defer alloc.free(enc);
         defer alloc.free(dec);
@@ -1832,8 +1826,11 @@ test "Encrypter encrypt" {
     const msg = "rsa PKCS1-v1_5 encrypt and decrypt";
 
     {
-        const enc = try rsa.Crypt.Encrypter.encrypt(alloc, random, pub_key, msg, .{});
-        const dec = try rsa.Crypt.Encrypter.decrypt(alloc, pri_key, enc, .{});
+        var encrypter = rsa.Crypt.Encrypter.init(alloc);
+        encrypter.withRandom(random);
+
+        const enc = try encrypter.encrypt(pub_key, msg);
+        const dec = try encrypter.decrypt(pri_key, enc);
 
         defer alloc.free(enc);
         defer alloc.free(dec);
@@ -1848,7 +1845,7 @@ test "Encrypter encrypt" {
         var enc2: [256]u8 = undefined;
         const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-        const dec2 = try rsa.Crypt.Encrypter.decrypt(alloc, pri_key, enc2_res, .{});
+        const dec2 = try encrypter.decrypt(pri_key, enc2_res);
         defer alloc.free(dec2);
 
         try testing.expectFmt(msg, "{s}", .{dec2});
@@ -1857,12 +1854,12 @@ test "Encrypter encrypt" {
     {
         const msg2 = "rsa PKCS1-v1_5 encrypt and decryptrsa PKCS1-v1_5 encrypt and dec";
 
-        const enc = try rsa.Crypt.Encrypter.encrypt(alloc, random, pub_key, msg2, .{
-            .padding = .no_padding,
-        });
-        const dec = try rsa.Crypt.Encrypter.decrypt(alloc, pri_key, enc, .{
-            .padding = .no_padding,
-        });
+        var encrypter = rsa.Crypt.Encrypter.init(alloc);
+        encrypter.withRandom(random);
+        encrypter.withPadding(.no_padding);
+
+        const enc = try encrypter.encrypt(pub_key, msg2);
+        const dec = try encrypter.decrypt(pri_key, enc);
 
         defer alloc.free(enc);
         defer alloc.free(dec);
@@ -1877,9 +1874,7 @@ test "Encrypter encrypt" {
         var enc2: [256]u8 = undefined;
         const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-        const dec2 = try rsa.Crypt.Encrypter.decrypt(alloc, pri_key, enc2_res, .{
-            .padding = .no_padding,
-        });
+        const dec2 = try encrypter.decrypt(pri_key, enc2_res);
         defer alloc.free(dec2);
 
         try testing.expectFmt(msg2, "{s}", .{dec2});
@@ -1903,9 +1898,10 @@ test "decryptPublicKey check" {
     var enc2: [256]u8 = undefined;
     const enc2_res = try fmt.hexToBytes(&enc2, check2);
 
-    const dec2 = try rsa.Crypt.Encrypter.decryptPublicKey(alloc, pub_key, enc2_res, .{
-        .padding = .x931_padding,
-    });
+    var encrypter = rsa.Crypt.Encrypter.init(alloc);
+    encrypter.withPadding(.x931_padding);
+
+    const dec2 = try encrypter.decryptPublicKey(pub_key, enc2_res);
     defer alloc.free(dec2);
 
     try testing.expectFmt("Hello RSA X9.31", "{s}", .{dec2});
