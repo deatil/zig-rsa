@@ -2333,22 +2333,22 @@ pub fn verifyPss(
 
 // incCounter increments a four byte, big-endian counter.
 fn incCounter(c: *[4]u8) void {
-    c[3] += 1;
+    c[3] +%= 1;
 	if (c[3] != 0) {
 		return;
 	}
 
-    c[2] += 1;
+    c[2] +%= 1;
 	if (c[2] != 0) {
 		return;
 	}
 
-    c[1] += 1; 
+    c[1] +%= 1; 
 	if (c[1] != 0) {
 		return;
 	}
 
-	c[0] += 1;
+	c[0] +%= 1;
 }
 
 /// mgf1XOR XORs the bytes in out with a mask generated using the MGF1 function
