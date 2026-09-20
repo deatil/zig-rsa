@@ -1197,10 +1197,10 @@ pub const Crypt = struct {
             return out;
         }
 
-        inline fn oaepLabelHash(comptime Hash: type, label: []const u8) []const u8 {
+        inline fn oaepLabelHash(comptime HashType: type, label: []const u8) []const u8 {
             if (label.len == 0) {
                 // magic constants from NIST
-                return &switch (Hash) {
+                return &switch (HashType) {
                     std.crypto.hash.Sha1 => .{
                         0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d,
                         0x32, 0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90,
@@ -1234,8 +1234,8 @@ pub const Crypt = struct {
                 };
             }
 
-            var res: [Hash.digest_length]u8 = undefined;
-            Hash.hash(label, &res, .{});
+            var res: [HashType.digest_length]u8 = undefined;
+            HashType.hash(label, &res, .{});
             return res[0..];
         }
 
@@ -1443,6 +1443,8 @@ pub const Crypt = struct {
     };
 
     pub const Oaep = struct {
+        const Self = @This();
+
         // Options corresponds to options for OAEP decryption.
         pub const Options = struct {
             // hash is the hash function that will be used when generating the mask.
@@ -1455,8 +1457,6 @@ pub const Crypt = struct {
             // used when encrypting.
             label: []const u8 = "",
         };
-
-        const Self = @This();
 
         /// Encrypt a short message using Optimal Asymmetric Encryption Padding (RSAES-OAEP).
         pub fn encrypt(
