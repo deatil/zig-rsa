@@ -1155,13 +1155,8 @@ pub const Crypt = struct {
             db[db.len - msg.len - 1] = 1;
             @memcpy(db[db.len - msg.len ..], msg);
 
-            var mgf_buf: [max_modulus_len]u8 = undefined;
-
-            const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
-            for (db, db_mask) |*v, m| v.* ^= m;
-
-            const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
-            for (seed, seed_mask) |*v, m| v.* ^= m;
+            mgf1XOR(MgfHash, seed, db);
+            mgf1XOR(MgfHash, db, seed);
 
             return em;
         }
@@ -1184,13 +1179,8 @@ pub const Crypt = struct {
             const seed = em[1..][0..digest_size];
             const db = em[1 + digest_size ..];
 
-            var mgf_buf: [max_modulus_len]u8 = undefined;
-
-            const seed_mask = mgf1(MgfHash, db, mgf_buf[0..seed.len]);
-            for (seed, seed_mask) |*v, m| v.* ^= m;
-
-            const db_mask = mgf1(MgfHash, seed, mgf_buf[0..db.len]);
-            for (db, db_mask) |*v, m| v.* ^= m;
+            mgf1XOR(MgfHash, db, seed);
+            mgf1XOR(MgfHash, seed, db);
 
             const expected_hash = oaepLabelHash(Hash, label);
             const actual_hash = db[0..expected_hash.len];
@@ -1739,9 +1729,9 @@ pub fn PKCS1v15(comptime H: type) type {
         }
 
         /// DER encoded header. Sequence of digest algo + digest.
-        fn hashPrefixe(h: type) []const u8 {
+        fn hashPrefixe(HashType: type) []const u8 {
             // Section 9.2 Notes 1.
-            return &switch (h) {
+            return &switch (HashType) {
                 std.crypto.hash.Md5 => .{
                     0x30, 0x20, 0x30, 0x0C, 0x06, 0x08, 0x2A, 0x86,
                     0x48, 0x86, 0xF7, 0x0D, 0x02, 0x05, 0x05, 0x00,
@@ -1996,8 +1986,13 @@ pub fn Pss(comptime H: type) type {
 
             fn verifyPrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !void {
                 const pk = self.public_key;
-                const em = try Crypt.encrypt(self.alloc, pk, self.sig);
+                const encrypted = try Crypt.encrypt(self.alloc, pk, self.sig);
+                defer self.alloc.free(encrypted);
+
+                var em = try self.alloc.alloc(u8, encrypted.len);
                 defer self.alloc.free(em);
+
+                @memcpy(em[0..], encrypted[0..]);
 
                 const mod_bits = pk.n.bits();
                 try PssT.emsaPSSVerify(&msg_hash, em, mod_bits - 1, self.salt_len, Hash);
@@ -2011,64 +2006,89 @@ pub fn Pss(comptime H: type) type {
         };
 
         /// PSS Encrypted Message Signature Appendix
-        fn emsaPSSEncode(alloc: Allocator, msg_hash: []const u8, em_bits: usize, salt: []const u8, hash: type) ![]u8 {
-            // emLen = \ceil(emBits/8)
-            const em_len = ((em_bits - 1) / 8) + 1;
-            const s_len = salt.len;
+        fn emsaPSSEncode(alloc: Allocator, msg_hash: []const u8, em_bits: usize, salt: []const u8, HashType: type) ![]u8 {
+            // See RFC 8017, Section 9.1.1.
 
-            const digest_size = hash.digest_length;
-            if (msg_hash.len != digest_size) {
+            // emLen = \ceil(emBits/8)
+            const em_len = (em_bits + 7) / 8;
+            const s_len = salt.len;
+            const h_len = HashType.digest_length;
+
+            // 1.  If the length of M is greater than the input limitation for the
+            //     hash function (2^61 - 1 octets for SHA-1), output "message too
+            //     long" and stop.
+            //
+            // 2.  Let mHash = Hash(M), an octet string of length hLen.
+
+            if (msg_hash.len != h_len) {
                 return error.RsaInputLongthError;
             }
 
-            if (em_len < digest_size + s_len + 2) {
+            // 3.  If emLen < hLen + sLen + 2, output "encoding error" and stop.
+            if (em_len < h_len + s_len + 2) {
                 return error.RsaMsgTooLong;
             }
 
             // EM = maskedDB || H || 0xbc
             var em = try alloc.alloc(u8, em_len);
-            em[em.len - 1] = 0xbc;
+            const ps_len = em_len - s_len - h_len - 2;
+            var db = em[0 .. ps_len + 1 + s_len];
+            const hashed = em[ps_len + 1 + s_len .. ][0..h_len];
 
-            // M' = (0x)00 00 00 00 00 00 00 00 || mHash || salt;
-            // H = Hash(M')
-            const hashed = em[em.len - 1 - digest_size ..][0..digest_size];
-            var hasher = hash.init(.{});
+            // 4.  Generate a random octet string salt of length sLen; if sLen = 0,
+            //     then salt is the empty string.
+            //
+            // 5.  Let
+            //       M' = (0x)00 00 00 00 00 00 00 00 || mHash || salt;
+            //
+            //     M' is an octet string of length 8 + hLen + sLen with eight
+            //     initial zero octets.
+            //
+            // 6.  Let H = Hash(M'), an octet string of length hLen.
+
+            var hasher = HashType.init(.{});
             hasher.update(&([_]u8{0} ** 8));
             hasher.update(msg_hash);
             hasher.update(salt);
             hasher.final(hashed);
 
             // DB = PS || 0x01 || salt
-            var db = em[0 .. em_len - digest_size - 1];
-            @memset(db[0 .. db.len - s_len - 1], 0);
-            db[db.len - s_len - 1] = 1;
-            @memcpy(db[db.len - s_len ..], salt);
+            @memset(db[0 .. ps_len], 0);
 
-            var mgf_buf: [max_modulus_len]u8 = undefined;
-            const mgf_len = em_len - digest_size - 1;
-            const mgf_out = mgf_buf[0 .. ((mgf_len - 1) / digest_size + 1) * digest_size];
+            // 7.  Generate an octet string PS consisting of emLen - sLen - hLen - 2
+            //     zero octets. The length of PS may be 0.
+            //
+            // 8.  Let DB = PS || 0x01 || salt; DB is an octet string of length
+            //     emLen - hLen - 1.
 
-            var db_mask = mgf1(hash, hashed, mgf_out);
-            db_mask = db_mask[0..mgf_len];
+            db[ps_len] = 1;
+            @memcpy(db[ps_len + 1 ..], salt);
 
-            var i: usize = 0;
-            while (i < db_mask.len) : (i += 1) {
-                db[i] = db[i] ^ db_mask[i];
-            }
+            // 9.  Let dbMask = MGF(H, emLen - hLen - 1).
+            //
+            // 10. Let maskedDB = DB \xor dbMask.
 
-            // Set the leftmost 8emLen - emBits bits of the leftmost octet
-            // in maskedDB to zero.
+            mgf1XOR(HashType, hashed, db);
+
+            // 11. Set the leftmost 8 * emLen - emBits bits of the leftmost octet in
+            //     maskedDB to zero.
             const shift = std.math.comptimeMod(8 * em_len - em_bits, 8);
             const mask = @as(u8, 0xff) >> shift;
             db[0] &= mask;
 
+            // 12. Let EM = maskedDB || H || 0xbc.
+            em[em.len - 1] = 0xbc;
+
             return em;
         }
 
-        fn emsaPSSVerify(m_hash: []const u8, em: []const u8, em_bits: usize, slen: usize, hash: type) !void {
-            const digest_size = hash.digest_length;
-
+        fn emsaPSSVerify(m_hash: []const u8, em: []u8, em_bits: usize, slen: usize, HashType: type) !void {
+            const hlen = HashType.digest_length;
+            
             var s_len = slen;
+            if (slen == pss_salt_length_equals_hash) {
+                s_len = hlen;
+            }
 
             // 1.   If the length of M is greater than the input limitation for
             //      the hash function (2^61 - 1 octets for SHA-1), output
@@ -2080,17 +2100,18 @@ pub fn Pss(comptime H: type) type {
             }
 
             // emLen = \ceil(emBits/8)
-            const em_len = ((em_bits - 1) / 8) + 1;
-            std.debug.assert(em_len == em.len);
+            const em_len = (em_bits + 7) / 8;
+            if (em_len != em.len) {
+                return error.RsaInconsistentLength;
+            }
 
             // 2.   Let mHash = Hash(M), an octet string of length hLen.
-            const hlen = digest_size;
             if (hlen != m_hash.len) {
                 return error.RsaInvalidSignature;
             }
 
             // 3.   If emLen < hLen + sLen + 2, output "inconsistent" and stop.
-            if (em_len < digest_size + s_len + 2) {
+            if (em_len < hlen + s_len + 2) {
                 return error.RsaInvalidSignature;
             }
 
@@ -2102,52 +2123,31 @@ pub fn Pss(comptime H: type) type {
 
             // 5.   Let maskedDB be the leftmost emLen - hLen - 1 octets of EM,
             //      and let H be the next hLen octets.
-            const masked_db = em[0..(em_len - digest_size - 1)];
-            const h = em[(em_len - digest_size - 1)..(em_len - 1)][0..digest_size];
+            var db = em[0..(em_len - hlen - 1)];
+            const h = em[(em_len - hlen - 1)..][0..hlen];
 
             // 6.   If the leftmost 8emLen - emBits bits of the leftmost octet in
             //      maskedDB are not all equal to zero, output "inconsistent" and
             //      stop.
-            const zero_bits = em_len * 8 - em_bits;
-            var mask: u8 = masked_db[0];
-            var i: usize = 0;
-            while (i < 8 - zero_bits) : (i += 1) {
-                mask = mask >> 1;
-            }
-            if (mask != 0) {
+            const shift = std.math.comptimeMod(8 * em_len - em_bits, 8);
+            const bitMask = @as(u8, 0xff) >> shift;
+            if ((em[0] & ~bitMask) != 0) {
                 return error.RsaInvalidSignature;
             }
 
-            // 7.   Let dbMask = MGF(H, emLen - hLen - 1).
-            const mgf_len = em_len - digest_size - 1;
-            var mgf_out_buf: [512]u8 = undefined;
-            if (mgf_len > mgf_out_buf.len) { // Modulus > 4096 bits
-                return error.RsaInvalidSignature;
-            }
+            // 7.  Let dbMask = MGF(H, emLen - hLen - 1).
+            //
+            // 8.  Let DB = maskedDB \xor dbMask.
 
-            const mgf_out = mgf_out_buf[0 .. ((mgf_len - 1) / digest_size + 1) * digest_size];
-            var db_mask = mgf1(hash, h, mgf_out);
-            db_mask = db_mask[0..mgf_len];
-
-            // 8.   Let DB = maskedDB \xor dbMask.
-            i = 0;
-            while (i < db_mask.len) : (i += 1) {
-                db_mask[i] = masked_db[i] ^ db_mask[i];
-            }
+            mgf1XOR(HashType, h, db);
 
             // 9.   Set the leftmost 8emLen - emBits bits of the leftmost octet
             //      in DB to zero.
-            i = 0;
-            mask = 0;
-            while (i < 8 - zero_bits) : (i += 1) {
-                mask = mask << 1;
-                mask += 1;
-            }
-            db_mask[0] = db_mask[0] & mask;
+            db[0] = db[0] & bitMask;
 
             if (s_len == pss_salt_length_auto) {
-                if (std.mem.indexOfScalar(u8, db_mask, 0x01)) |ps_len| {
-                    s_len = db_mask.len - ps_len - 1;
+                if (std.mem.indexOfScalar(u8, db, 0x01)) |ps_len| {
+                    s_len = db.len - ps_len - 1;
                 } else {
                     return error.RsaErrorVerification;
                 }
@@ -2157,27 +2157,27 @@ pub fn Pss(comptime H: type) type {
             //      zero or if the octet at position emLen - hLen - sLen - 1 (the
             //      leftmost position is "position 1") does not have hexadecimal
             //      value 0x01, output "inconsistent" and stop.
-            const ps_len = em_len - digest_size - s_len - 2;
-            for (db_mask[0..ps_len]) |e| {
+            const ps_len = em_len - hlen - s_len - 2;
+            for (db[0..ps_len]) |e| {
                 if (e != 0x00) {
                     return error.RsaInvalidSignature;
                 }
             }
 
-            if (db_mask[ps_len] != 0x01) {
+            if (db[ps_len] != 0x01) {
                 return error.RsaInvalidSignature;
             }
 
             // 11.  Let salt be the last sLen octets of DB.
-            const salt = db_mask[(db_mask.len - s_len)..];
+            const salt = db[(db.len - s_len)..];
 
             // 12.  Let
             //         M' = (0x)00 00 00 00 00 00 00 00 || mHash || salt ;
             //      M' is an octet string of length 8 + hLen + sLen with eight
             //      initial zero octets.
             // 13.  Let H' = Hash(M'), an octet string of length hLen.
-            var h_p: [digest_size]u8 = undefined;
-            var hasher = hash.init(.{});
+            var h_p: [hlen]u8 = undefined;
+            var hasher = HashType.init(.{});
             hasher.update(&([_]u8{0} ** 8));
             hasher.update(m_hash);
             hasher.update(salt);
@@ -2331,58 +2331,48 @@ pub fn verifyPss(
     try sign.verify(alloc, msg, public_key, opts);
 }
 
-/// Mask generation function. Currently the only one defined.
-fn mgf1(comptime Hash: type, seed: []const u8, out: []u8) []u8 {
-    const digest_size = Hash.digest_length;
+// incCounter increments a four byte, big-endian counter.
+fn incCounter(c: *[4]u8) void {
+    c[3] += 1;
+	if (c[3] != 0) {
+		return;
+	}
 
-    var c: [@sizeOf(u32)]u8 = undefined;
-    var tmp: [digest_size]u8 = undefined;
+    c[2] += 1;
+	if (c[2] != 0) {
+		return;
+	}
 
-    var i: usize = 0;
-    var counter: u32 = 0;
-    while (i < out.len) : (counter += 1) {
-        var hasher = Hash.init(.{});
-        hasher.update(seed);
-        std.mem.writeInt(u32, &c, counter, .big);
-        hasher.update(&c);
+    c[1] += 1; 
+	if (c[1] != 0) {
+		return;
+	}
 
-        const left = out.len - i;
-        if (left >= digest_size) {
-            // optimization: write straight to `out`
-            hasher.final(out[i..][0..digest_size]);
-            i += digest_size;
-        } else {
-            hasher.final(&tmp);
-            @memcpy(out[i..][0..left], tmp[0..left]);
-            i += left;
-        }
-    }
-
-    return out;
+	c[0] += 1;
 }
 
-test "mgf1" {
-    const Hash = std.crypto.hash.sha2.Sha256;
-    var out: [Hash.digest_length * 2 + 1]u8 = undefined;
-    try std.testing.expectEqualSlices(
-        u8,
-        &utils.hexToBytes(
-            \\ed 1b 84 6b b9 26 39 00  c8 17 82 ad 08 eb 17 01
-            \\fa 8c 72 21 c6 57 63 77  31 7f 5c e8 09 89 9f
-        ),
-        mgf1(Hash, "asdf", out[0 .. Hash.digest_length - 1]),
-    );
-    try std.testing.expectEqualSlices(
-        u8,
-        &utils.hexToBytes(
-            \\ed 1b 84 6b b9 26 39 00  c8 17 82 ad 08 eb 17 01
-            \\fa 8c 72 21 c6 57 63 77  31 7f 5c e8 09 89 9f 5a
-            \\22 F2 80 D5 28 08 F4 93  83 76 00 DE 09 E4 EC 92
-            \\4A 2C 7C EF 0D F7 7B BE  8F 7F 12 CB 8F 33 A6 65
-            \\AB
-        ),
-        mgf1(Hash, "asdf", &out),
-    );
+/// mgf1XOR XORs the bytes in out with a mask generated using the MGF1 function
+/// specified in PKCS #1 v2.1.
+fn mgf1XOR(comptime HashType: type, seed: []const u8, out: []u8) void {
+    var counter: [4]u8 = [_]u8{0} ** 4;
+    var digest: [HashType.digest_length]u8 = undefined;
+
+    var i: usize = 0;
+    var done: usize = 0;
+    while (done < out.len) {
+        var hasher = HashType.init(.{});
+        hasher.update(seed);
+        hasher.update(counter[0..]);
+        hasher.final(&digest);
+
+        i = 0;
+        while (i < digest.len and done < out.len): (i += 1) {
+			out[done] ^= digest[i];
+			done += 1;
+        }
+
+        incCounter(&counter);
+    }
 }
 
 const ct = if (std.options.side_channels_mitigations == .none) ct_unprotected else ct_protected;
@@ -2444,6 +2434,36 @@ const ct_protected = struct {
         return (@intFromBool(a) | @intFromBool(b)) == 1;
     }
 };
+
+test "mgf1XOR" {
+    const Hash = std.crypto.hash.sha2.Sha256;
+    var out = [_]u8{0} ** (Hash.digest_length * 2 + 1);
+
+    mgf1XOR(Hash, "asdf", out[0 .. Hash.digest_length - 1]);
+    try std.testing.expectEqualSlices(
+        u8,
+        &utils.hexToBytes(
+            \\ed 1b 84 6b b9 26 39 00  c8 17 82 ad 08 eb 17 01
+            \\fa 8c 72 21 c6 57 63 77  31 7f 5c e8 09 89 9f
+        ),
+        out[0 .. Hash.digest_length - 1],
+    );
+
+    var out2 = [_]u8{0} ** (Hash.digest_length * 2 + 1);
+
+    mgf1XOR(Hash, "asdf", &out2);
+    try std.testing.expectEqualSlices(
+        u8,
+        &utils.hexToBytes(
+            \\ed 1b 84 6b b9 26 39 00  c8 17 82 ad 08 eb 17 01
+            \\fa 8c 72 21 c6 57 63 77  31 7f 5c e8 09 89 9f 5a
+            \\22 F2 80 D5 28 08 F4 93  83 76 00 DE 09 E4 EC 92
+            \\4A 2C 7C EF 0D F7 7B BE  8F 7F 12 CB 8F 33 A6 65
+            \\AB
+        ),
+        out2[0..],
+    );
+}
 
 test "ct" {
     const c = ct_unprotected;
