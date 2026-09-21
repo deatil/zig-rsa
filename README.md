@@ -85,7 +85,7 @@ pub fn main(init: std.process.Init) !void {
 
     // output: 
     // rsa verifyPkcs1v15: true
-    std.debug.print("rsa verifyPkcs1v15: {} \n", .{});
+    std.debug.print("rsa verifyPkcs1v15: {any} \n", .{status});
 }
 ~~~
 
