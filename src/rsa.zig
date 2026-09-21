@@ -1028,7 +1028,7 @@ pub const Crypt = struct {
 
         pub fn pkcs1Type1Pad(alloc: Allocator, em_len: usize, msg: []const u8) ![]const u8 {
             if (msg.len > em_len - 11) {
-                return error.ErrMessageTooLong;
+                return error.RsaMessageTooLong;
             }
 
             // EM = 0x00 || 0x01 || PS || 0x00 || M.
@@ -1083,7 +1083,7 @@ pub const Crypt = struct {
 
         pub fn pkcs1Type2Pad(alloc: Allocator, random: Random, em_len: usize, msg: []const u8) ![]const u8 {
             if (msg.len > em_len - 11) {
-                return error.ErrMessageTooLong;
+                return error.RsaMessageTooLong;
             }
 
             // EM = 0x00 || 0x02 || PS || 0x00 || M.
@@ -1133,9 +1133,9 @@ pub const Crypt = struct {
             msg: []const u8,
             label: []const u8,
         ) ![]const u8 {
-            const digest_size = Hash.digest_length;
+            const hash_size = Hash.digest_length;
 
-            if (msg.len > em_len - 2 * digest_size - 2) {
+            if (msg.len > em_len - 2 * hash_size - 2) {
                 return error.RsaMessageTooLong;
             }
 
@@ -1143,7 +1143,7 @@ pub const Crypt = struct {
             var em = try alloc.alloc(u8, em_len);
 
             em[0] = 0;
-            const seed = em[1..][0..digest_size];
+            const seed = em[1..][0..hash_size];
 
             random.bytes(seed);
 
@@ -1168,16 +1168,16 @@ pub const Crypt = struct {
             em_bytes: []const u8,
             label: []const u8,
         ) ![]u8 {
-            const digest_size = Hash.digest_length;
+            const hash_size = Hash.digest_length;
 
             var em = try alloc.alloc(u8, em_bytes.len);
             defer alloc.free(em);
-            
+
             @memcpy(em[0..], em_bytes[0..]);
 
             const y = em[0];
-            const seed = em[1..][0..digest_size];
-            const db = em[1 + digest_size ..];
+            const seed = em[1..][0..hash_size];
+            const db = em[1 + hash_size ..];
 
             mgf1XOR(MgfHash, db, seed);
             mgf1XOR(MgfHash, seed, db);
@@ -1306,11 +1306,11 @@ pub const Crypt = struct {
     pub const Encrypter = struct {
         alloc: Allocator,
 
-        // encrypter for pkcs1Type2Pad, oaepPad
-        random: Random = undefined, 
-
         // encrypter padding type
         padding: RsaPadding = .pkcs1_padding,
+
+        // encrypter for pkcs1Type2Pad, oaepPad
+        random: Random = undefined, 
 
         const Self = @This();
 
@@ -1327,12 +1327,12 @@ pub const Crypt = struct {
             };
         }
 
-        pub fn withRandom(self: *Self, random: Random) void {
-            self.random = random;
-        }
-
         pub fn withPadding(self: *Self, padding: RsaPadding) void {
             self.padding = padding;
+        }
+
+        pub fn withRandom(self: *Self, random: Random) void {
+            self.random = random;
         }
 
         pub fn encrypt(self: *Self, public_key: PublicKey, msg: []const u8) ![]const u8 {
@@ -1894,7 +1894,7 @@ pub fn Pss(comptime H: type) type {
             }
 
             fn finalizePrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !PssT.Signature {
-                const digest_size = Hash.digest_length;
+                const hash_size = Hash.digest_length;
                 const n = self.secret_key.public_key.n;
 
                 // RFC 4055 S3.1
@@ -1905,10 +1905,10 @@ pub fn Pss(comptime H: type) type {
                     var salt_len: usize = 0;
                     switch (self.opts.salt_leng) {
                         pss_salt_length_auto => {
-                            salt_len = (n.bits() - 1 + 7) / 8 - 2 - digest_size;
+                            salt_len = (n.bits() - 1 + 7) / 8 - 2 - hash_size;
                         },
                         pss_salt_length_equals_hash => {
-                            salt_len = digest_size;
+                            salt_len = hash_size;
                         },
                         else => {
                             if (self.opts.salt_leng > 0) {
