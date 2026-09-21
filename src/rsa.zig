@@ -251,7 +251,7 @@ pub const SecretKey = struct {
 
         const crts_seq = try parser.expectSequence();
 
-        var crts_parser = der.Parser{ 
+        var crts_parser = der.Parser{
             .bytes = parser.view(crts_seq),
         };
 
@@ -1310,7 +1310,7 @@ pub const Crypt = struct {
         padding: RsaPadding = .pkcs1_padding,
 
         // encrypter for pkcs1Type2Pad, oaepPad
-        random: Random = undefined, 
+        random: Random = undefined,
 
         const Self = @This();
 
@@ -1409,7 +1409,7 @@ pub const Crypt = struct {
             var encrypter = CryptT.Encrypter.init(alloc);
             encrypter.withRandom(random);
             encrypter.withPadding(.pkcs1_padding);
-            
+
             const out = try encrypter.encrypt(public_key, msg);
             return out;
         }
@@ -1418,7 +1418,7 @@ pub const Crypt = struct {
         pub fn decrypt(alloc: Allocator, secret_key: SecretKey, ciphertext: []const u8) ![]const u8 {
             var encrypter = CryptT.Encrypter.init(alloc);
             encrypter.withPadding(.pkcs1_padding);
-            
+
             const out = try encrypter.decrypt(secret_key, ciphertext);
             return out;
         }
@@ -1427,7 +1427,7 @@ pub const Crypt = struct {
         pub fn encryptSecretKey(alloc: Allocator, secret_key: SecretKey, msg: []const u8) ![]const u8 {
             var encrypter = CryptT.Encrypter.init(alloc);
             encrypter.withPadding(.pkcs1_padding);
-            
+
             const out = try encrypter.encryptSecretKey(secret_key, msg);
             return out;
         }
@@ -1436,7 +1436,7 @@ pub const Crypt = struct {
         pub fn decryptPublicKey(alloc: Allocator, public_key: PublicKey, ciphertext: []const u8) ![]const u8 {
             var encrypter = CryptT.Encrypter.init(alloc);
             encrypter.withPadding(.pkcs1_padding);
-            
+
             const out = try encrypter.decryptPublicKey(public_key, ciphertext);
             return out;
         }
@@ -1622,10 +1622,11 @@ pub fn PKCS1v15(comptime H: type) type {
 
             fn finalizePrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !PkcsT.Signature {
                 const pk = self.secret_key.public_key;
+                const k = pk.size();
 
                 const prefix = comptime PkcsT.hashPrefixe(Hash);
 
-                const em = try PkcsT.emsaEncode(self.alloc, pk, prefix, &msg_hash);
+                const em = try PkcsT.emsaEncode(self.alloc, &msg_hash, k, prefix);
                 defer self.alloc.free(em);
 
                 const sig = try Crypt.decryptWithCheck(self.alloc, self.secret_key, em);
@@ -1665,13 +1666,14 @@ pub fn PKCS1v15(comptime H: type) type {
 
             fn verifyPrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !void {
                 const pk = self.public_key;
+                const k = pk.size();
 
                 const em = try Crypt.encrypt(self.alloc, pk, self.sig);
                 defer self.alloc.free(em);
 
                 const prefix = comptime PkcsT.hashPrefixe(Hash);
 
-                const expected = try PkcsT.emsaEncode(self.alloc, pk, prefix, &msg_hash);
+                const expected = try PkcsT.emsaEncode(self.alloc, &msg_hash, k, prefix);
                 defer self.alloc.free(expected);
 
                 if (!std.mem.eql(u8, expected, em)) {
@@ -1690,7 +1692,9 @@ pub fn PKCS1v15(comptime H: type) type {
         pub fn signPlain(alloc: Allocator, secret_key: SecretKey, msg: []const u8) ![]u8 {
             const pk = secret_key.public_key;
 
-            const em = try PkcsT.emsaEncode(alloc, pk, &[_]u8{}, msg);
+            const k = pk.size();
+
+            const em = try PkcsT.emsaEncode(alloc, msg, k, &[_]u8{});
             defer alloc.free(em);
 
             const sig = try Crypt.decryptWithCheck(alloc, secret_key, em);
@@ -1701,7 +1705,9 @@ pub fn PKCS1v15(comptime H: type) type {
             const em = try Crypt.encrypt(alloc, public_key, sig);
             defer alloc.free(em);
 
-            const expected = try PkcsT.emsaEncode(alloc, public_key, &[_]u8{}, msg);
+            const k = public_key.size();
+
+            const expected = try PkcsT.emsaEncode(alloc, msg, k, &[_]u8{});
             defer alloc.free(expected);
 
             if (!std.mem.eql(u8, expected, em)) {
@@ -1710,20 +1716,19 @@ pub fn PKCS1v15(comptime H: type) type {
         }
 
         /// PKCS Encrypted Message Signature Appendix
-        fn emsaEncode(alloc: Allocator, public_key: PublicKey, prefix: []const u8, hashed: []const u8) ![]u8 {
-            const k = public_key.size();
-            if (k < prefix.len + hashed.len + 2 + 8 + 1) {
+        fn emsaEncode(alloc: Allocator, m_hash: []const u8, em_len: usize, prefix: []const u8) ![]u8 {
+            if (em_len < prefix.len + m_hash.len + 2 + 8 + 1) {
                 return error.RsaMessageTooLong;
             }
 
-            var em = try alloc.alloc(u8, k);
+            var em = try alloc.alloc(u8, em_len);
             em[0] = 0;
             em[1] = 1;
-            const padding_len = k - prefix.len - hashed.len - 3;
+            const padding_len = em_len - prefix.len - m_hash.len - 3;
             @memset(em[2..][0..padding_len], 0xff);
             em[2 + padding_len] = 0;
-            @memcpy(em[k - prefix.len - hashed.len ..][0..prefix.len], prefix);
-            @memcpy(em[k - hashed.len ..], hashed);
+            @memcpy(em[em_len - prefix.len - m_hash.len ..][0..prefix.len], prefix);
+            @memcpy(em[em_len - m_hash.len ..], m_hash);
 
             return em;
         }
@@ -2033,7 +2038,7 @@ pub fn Pss(comptime H: type) type {
             var em = try alloc.alloc(u8, em_len);
             const ps_len = em_len - s_len - h_len - 2;
             var db = em[0 .. ps_len + 1 + s_len];
-            const hashed = em[ps_len + 1 + s_len .. ][0..h_len];
+            const hashed = em[ps_len + 1 + s_len ..][0..h_len];
 
             // 4.  Generate a random octet string salt of length sLen; if sLen = 0,
             //     then salt is the empty string.
@@ -2053,7 +2058,7 @@ pub fn Pss(comptime H: type) type {
             hasher.final(hashed);
 
             // DB = PS || 0x01 || salt
-            @memset(db[0 .. ps_len], 0);
+            @memset(db[0..ps_len], 0);
 
             // 7.  Generate an octet string PS consisting of emLen - sLen - hLen - 2
             //     zero octets. The length of PS may be 0.
@@ -2084,7 +2089,7 @@ pub fn Pss(comptime H: type) type {
 
         fn emsaPSSVerify(m_hash: []const u8, em: []u8, em_bits: usize, slen: usize, HashType: type) !void {
             const hlen = HashType.digest_length;
-            
+
             var s_len = slen;
             if (slen == pss_salt_length_equals_hash) {
                 s_len = hlen;
@@ -2334,21 +2339,21 @@ pub fn verifyPss(
 // incCounter increments a four byte, big-endian counter.
 fn incCounter(c: *[4]u8) void {
     c[3] +%= 1;
-	if (c[3] != 0) {
-		return;
-	}
+    if (c[3] != 0) {
+        return;
+    }
 
     c[2] +%= 1;
-	if (c[2] != 0) {
-		return;
-	}
+    if (c[2] != 0) {
+        return;
+    }
 
-    c[1] +%= 1; 
-	if (c[1] != 0) {
-		return;
-	}
+    c[1] +%= 1;
+    if (c[1] != 0) {
+        return;
+    }
 
-	c[0] +%= 1;
+    c[0] +%= 1;
 }
 
 /// mgf1XOR XORs the bytes in out with a mask generated using the MGF1 function
@@ -2362,13 +2367,13 @@ fn mgf1XOR(comptime HashType: type, seed: []const u8, out: []u8) void {
     while (done < out.len) {
         var hasher = HashType.init(.{});
         hasher.update(seed);
-        hasher.update(counter[0..]);
+        hasher.update(&counter);
         hasher.final(&digest);
 
         i = 0;
-        while (i < digest.len and done < out.len): (i += 1) {
-			out[done] ^= digest[i];
-			done += 1;
+        while (i < digest.len and done < out.len) : (i += 1) {
+            out[done] ^= digest[i];
+            done += 1;
         }
 
         incCounter(&counter);
