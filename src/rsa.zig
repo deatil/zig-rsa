@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 pub const der = @import("der.zig");
 pub const oids = @import("oid.zig");
 pub const utils = @import("utils.zig");
+pub const subtle = @import("subtle.zig");
 
 pub const max_modulus_bits = 4096;
 pub const max_modulus_len = max_modulus_bits / 8;
@@ -2301,7 +2302,7 @@ pub fn Pss(comptime H: type) type {
 
             // 9.   Set the leftmost 8emLen - emBits bits of the leftmost octet
             //      in DB to zero.
-            db[0] = db[0] & bitMask;
+            db[0] &= bitMask;
 
             if (s_len == pss_salt_length_auto) {
                 if (std.mem.indexOfScalar(u8, db, 0x01)) |ps_len| {
@@ -2854,5 +2855,6 @@ test "ct" {
 }
 
 test {
+    _ = @import("subtle.zig");
     _ = @import("rsa_test.zig");
 }
