@@ -29,6 +29,10 @@ pub const PssSha256 = Pss(sha2.Sha256);
 pub const PssSha384 = Pss(sha2.Sha384);
 pub const PssSha512 = Pss(sha2.Sha512);
 
+pub const X931Sha256 = X931(sha2.Sha256);
+pub const X931Sha384 = X931(sha2.Sha384);
+pub const X931Sha512 = X931(sha2.Sha512);
+
 // Pkcs1PrivateKey is a structure which mirrors the PKCS #1 ASN.1 for an RSA private key.
 const Pkcs1PrivateKey = struct {
     version: asn1.Opaque(asn1.Tag.universal(.integer, false)),
@@ -807,6 +811,154 @@ pub const KeyPair = struct {
         return priv;
     }
 
+    pub fn generateX931(alloc: Allocator, random: Random, bits: usize) !Self {
+        if (bits < utils.min_modulus_bits or bits > utils.max_modulus_bits or bits % 2 != 0) {
+            return error.RsaInvalidBits;
+        }
+
+        const e: u64 = 65537;
+
+        const half = bits / 2;
+        const half_len = utils.byteLen(half);
+
+        var e_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &e_bytes, e, .big);
+
+        var p_buf: [max_modulus_len]u8 = undefined;
+        defer std.crypto.secureZero(u8, p_buf[0..half_len]);
+
+        var q_buf: [max_modulus_len]u8 = undefined;
+        defer std.crypto.secureZero(u8, q_buf[0..half_len]);
+
+        const p_bytes = p_buf[0..half_len];
+        const q_bytes = q_buf[0..half_len];
+
+        var big4 = try utils.bigFromInt(alloc, 4);
+        var big3 = try utils.bigFromInt(alloc, 3);
+
+        defer big4.deinit();
+        defer big3.deinit();
+
+        while (true) {
+            utils.generatePrime(random, half, e, p_bytes);
+            while (true) {
+                utils.generatePrime(random, half, e, q_bytes);
+                if (!utils.topBitsMatch(p_bytes, q_bytes)) {
+                    break;
+                }
+            }
+
+            const pb = utils.stripLeadingZeros(p_bytes);
+            const qb = utils.stripLeadingZeros(q_bytes);
+            const eb = utils.stripLeadingZeros(&e_bytes);
+
+            if (pb.len > max_modulus_len or qb.len > max_modulus_len) {
+                continue;
+            }
+
+            // e must be odd and >= 3 (RFC 8017 §3.1); evenness would also fail the
+            // gcd check below, but reject early and explicitly.
+            if (eb.len == 0 or eb[eb.len - 1] & 1 == 0) {
+                continue;
+            }
+            if (eb.len == 1 and eb[0] < 3) {
+                continue;
+            }
+
+            var bp = try utils.bigFromBytes(alloc, pb);
+            var bq = try utils.bigFromBytes(alloc, qb);
+            var be = try utils.bigFromBytes(alloc, eb);
+
+            defer bp.deinit();
+            defer bq.deinit();
+            defer be.deinit();
+
+            // p == q
+            if (bp.order(bq) == .eq) {
+                continue;
+            }
+
+            // if prime % 4 == 3, it is true
+            var prime_rem = try utils.bigMod(alloc, &bp, &big4);
+            defer prime_rem.deinit();
+            if (prime_rem.order(big3) != .eq) {
+                continue;
+            }
+
+            var prime_rem2 = try utils.bigMod(alloc, &bq, &big4);
+            defer prime_rem2.deinit();
+            if (prime_rem2.order(big3) != .eq) {
+                continue;
+            }
+
+            var bn = try utils.newBig(alloc);
+            defer bn.deinit();
+            try bn.mul(&bp, &bq);
+            if (bn.bitCountAbs() > max_modulus_bits) {
+                continue;
+            }
+
+            var n_buf: [max_modulus_len]u8 = undefined;
+            bn.toConst().writeTwosComplement(&n_buf, .big);
+            const n = Modulus.fromBytes(&n_buf, .big) catch {
+                continue;
+            };
+
+            // λ(n) = lcm(p-1, q-1) = (p-1)(q-1) / gcd(p-1, q-1).
+            var p1 = try utils.newBig(alloc);
+            try p1.addScalar(&bp, -1);
+            var q1 = try utils.newBig(alloc);
+            try q1.addScalar(&bq, -1);
+            var g = try utils.newBig(alloc);
+            try g.gcd(&p1, &q1);
+            var phi = try utils.newBig(alloc);
+            try phi.mul(&p1, &q1);
+            var lambda = try utils.newBig(alloc);
+            var rem = try utils.newBig(alloc);
+            try lambda.divFloor(&rem, &phi, &g); // exact: g | (p-1)(q-1)
+
+            defer p1.deinit();
+            defer q1.deinit();
+            defer g.deinit();
+            defer phi.deinit();
+            defer lambda.deinit();
+            defer rem.deinit();
+
+            // d = e⁻¹ mod λ(n); also proves gcd(e, λ(n)) = 1.
+            var bd = try utils.bigModInverse(alloc, &be, &lambda);
+            if (bd.eqlZero()) {
+                continue;
+            }
+
+            defer bd.deinit();
+
+            const d = try utils.feFromBig(n, &bd);
+
+            const fe_e = try Fe.fromBytes(n, &e_bytes, .big);
+            const fe_p = try Fe.fromBytes(n, p_bytes, .big);
+            const fe_q = try Fe.fromBytes(n, q_bytes, .big);
+
+            const pk = PublicKey{
+                .n = n,
+                .e = fe_e,
+            };
+
+            var primes = [_]Fe{ fe_p, fe_q };
+
+            var sk = SecretKey{
+                .public_key = pk,
+                .d = d,
+                .primes = try alloc.dupe(Fe, primes[0..]),
+            };
+            try sk.precompute(alloc);
+
+            return .{
+                .public_key = pk,
+                .secret_key = sk,
+            };
+        }
+    }
+
     /// Return the public key corresponding to the secret key.
     pub fn fromSecretKey(secret_key: SecretKey) !Self {
         return .{
@@ -1153,7 +1305,7 @@ pub const Crypt = struct {
             @memcpy(db[0..lHash.len], lHash);
             @memset(db[lHash.len .. db.len - msg.len - 2], 0);
             db[db.len - msg.len - 1] = 1;
-            @memcpy(db[db.len - msg.len ..], msg);
+            @memcpy(db[db.len - msg.len ..][0..msg.len], msg);
 
             mgf1XOR(MgfHash, seed, db);
             mgf1XOR(MgfHash, db, seed);
@@ -1728,7 +1880,7 @@ pub fn PKCS1v15(comptime H: type) type {
             @memset(em[2..][0..padding_len], 0xff);
             em[2 + padding_len] = 0;
             @memcpy(em[em_len - prefix.len - m_hash.len ..][0..prefix.len], prefix);
-            @memcpy(em[em_len - m_hash.len ..], m_hash);
+            @memcpy(em[em_len - m_hash.len ..][0..m_hash.len], m_hash);
 
             return em;
         }
@@ -1814,6 +1966,7 @@ pub fn PKCS1v15(comptime H: type) type {
 // pss_salt_length_auto causes the salt in a PSS signature to be as large
 // as possible when signing, and to be auto-detected when verifying.
 pub const pss_salt_length_auto = 0;
+
 // pss_salt_length_equals_hash causes the salt length to equal the length
 // of the hash used in the signature.
 pub const pss_salt_length_equals_hash = -1;
@@ -2197,14 +2350,209 @@ pub fn Pss(comptime H: type) type {
     };
 }
 
-// generate_key generates an RSA keypair of the given bit size using the
+/// Signature Scheme with X931
+pub fn X931(comptime H: type) type {
+    return struct {
+        const X931T = @This();
+
+        pub const Hash = H;
+
+        pub const Signature = struct {
+            bytes: []u8,
+
+            const Self = @This();
+
+            pub fn deinit(self: *Self, alloc: Allocator) void {
+                alloc.free(self.bytes);
+            }
+
+            pub fn verifier(self: Self, alloc: Allocator, public_key: PublicKey) !X931T.Verifier {
+                return Verifier.init(alloc, self, public_key);
+            }
+
+            pub fn verify(self: Self, alloc: Allocator, msg: []const u8, public_key: PublicKey) !void {
+                var st = Verifier.init(alloc, self, public_key);
+                st.update(msg);
+                return st.verify();
+            }
+
+            /// Verify the signature against a pre-hashed message and public key.
+            /// The message must have already been hashed using the scheme's hash function.
+            pub fn verifyPrehashed(self: Self, alloc: Allocator, msg_hash: [Hash.digest_length]u8, public_key: PublicKey) !void {
+                var st = try self.verifier(alloc, public_key);
+                return st.verifyPrehashed(msg_hash);
+            }
+
+            /// Return the raw signature bytes.
+            pub fn toBytes(self: Self) []u8 {
+                return self.bytes;
+            }
+
+            /// Create a signature from a bytes.
+            pub fn fromBytes(bytes: []u8) Self {
+                return .{
+                    .bytes = bytes,
+                };
+            }
+        };
+
+        pub const Signer = struct {
+            alloc: Allocator,
+            h: Hash,
+            secret_key: SecretKey,
+
+            const Self = @This();
+
+            pub fn init(alloc: Allocator, secret_key: SecretKey) Self {
+                return .{
+                    .alloc = alloc,
+                    .h = Hash.init(.{}),
+                    .secret_key = secret_key,
+                };
+            }
+
+            pub fn update(self: *Self, data: []const u8) void {
+                self.h.update(data);
+            }
+
+            fn finalizePrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !X931T.Signature {
+                const pk = self.secret_key.public_key;
+                const k = pk.size();
+
+                const hash_id = comptime X931T.hashID(Hash);
+
+                const em = try X931T.emsaX931Encode(self.alloc, &msg_hash, k, hash_id);
+                defer self.alloc.free(em);
+
+                const sig = try Crypt.decryptWithCheck(self.alloc, self.secret_key, em);
+
+                const siged = X931T.Signature.fromBytes(sig);
+                return siged;
+            }
+
+            pub fn finalize(self: *Self) !X931T.Signature {
+                var hashed: [Hash.digest_length]u8 = undefined;
+                self.h.final(&hashed);
+                const sig = self.finalizePrehashed(hashed);
+                return sig;
+            }
+        };
+
+        pub const Verifier = struct {
+            alloc: Allocator,
+            h: Hash,
+            sig: []u8,
+            public_key: PublicKey,
+
+            const Self = @This();
+
+            fn init(alloc: Allocator, sig: X931T.Signature, public_key: PublicKey) Self {
+                return .{
+                    .alloc = alloc,
+                    .h = Hash.init(.{}),
+                    .sig = sig.bytes,
+                    .public_key = public_key,
+                };
+            }
+
+            pub fn update(self: *Self, data: []const u8) void {
+                self.h.update(data);
+            }
+
+            fn verifyPrehashed(self: *Self, msg_hash: [Hash.digest_length]u8) !void {
+                const pk = self.public_key;
+                const k = pk.size();
+
+                const em = try Crypt.encrypt(self.alloc, pk, self.sig);
+                defer self.alloc.free(em);
+
+                const hash_id = comptime X931T.hashID(Hash);
+
+                const expected = try X931T.emsaX931Encode(self.alloc, &msg_hash, k, hash_id);
+                defer self.alloc.free(expected);
+
+                if (!std.mem.eql(u8, expected, em)) {
+                    return error.RsaVerifyFail;
+                }
+            }
+
+            pub fn verify(self: *Self) !void {
+                var hashed: [Hash.digest_length]u8 = undefined;
+                self.h.final(&hashed);
+                try self.verifyPrehashed(hashed);
+            }
+        };
+
+        /// sign with no hash msg
+        pub fn signPlain(alloc: Allocator, secret_key: SecretKey, msg: []const u8) ![]u8 {
+            const pk = secret_key.public_key;
+
+            const k = pk.size();
+
+            const em = try X931T.emsaX931Encode(alloc, msg, k, &[_]u8{});
+            defer alloc.free(em);
+
+            const sig = try Crypt.decryptWithCheck(alloc, secret_key, em);
+            return sig;
+        }
+
+        pub fn verifyPlain(alloc: Allocator, public_key: PublicKey, msg: []const u8, sig: []u8) !void {
+            const em = try Crypt.encrypt(alloc, public_key, sig);
+            defer alloc.free(em);
+
+            const k = public_key.size();
+
+            const expected = try X931T.emsaX931Encode(alloc, msg, k, &[_]u8{});
+            defer alloc.free(expected);
+
+            if (!std.mem.eql(u8, expected, em)) {
+                return error.RsaVerifyFail;
+            }
+        }
+
+        /// X931 Encrypted Message Signature Appendix
+        fn emsaX931Encode(alloc: Allocator, m_hash: []const u8, em_len: usize, hash_id: []const u8) ![]u8 {
+            const h_len = m_hash.len;
+            const j = em_len - h_len - hash_id.len - 2;
+            if (j < 0) {
+                return error.RsaMessageTooLong;
+            }
+
+            var em = try alloc.alloc(u8, em_len);
+            em[0] = 0x6b;
+            @memset(em[1..j], 0xbb);
+            em[j] = 0xba;
+            @memcpy(em[em_len - h_len - hash_id.len - 1 ..][0..h_len], m_hash);
+            @memcpy(em[em_len - hash_id.len - 1 ..][0..hash_id.len], hash_id);
+            em[em_len - 1] = 0xcc;
+
+            return em;
+        }
+
+        fn hashID(HashType: type) []const u8 {
+            return &switch (HashType) {
+                std.crypto.hash.Sha1 => .{0x33},
+                sha2.Sha256 => .{0x34},
+                sha2.Sha384 => .{0x36},
+                sha2.Sha512 => .{0x35},
+                else => @compileError("unknown Hash " ++ @typeName(Hash)),
+            };
+        }
+    };
+}
+
+// generateKey generates an RSA keypair of the given bit size using the
 // random source random.
-pub fn generate_key(alloc: Allocator, random: Random, bits: usize) !KeyPair {
+pub fn generateKey(alloc: Allocator, random: Random, bits: usize) !KeyPair {
     return KeyPair.generate(alloc, random, bits);
 }
 
 pub fn generateMultiPrimeKey(alloc: Allocator, random: Random, bits: usize, nprimes: usize) !KeyPair {
     return KeyPair.generateMultiPrimeKey(alloc, random, bits, nprimes);
+}
+
+pub fn generateX931Key(alloc: Allocator, random: Random, bits: usize) !KeyPair {
+    return KeyPair.generateX931(alloc, random, bits);
 }
 
 /// Encrypt a short message using RSAES-PKCS1-v1_5.
@@ -2334,6 +2682,31 @@ pub fn verifyPss(
 ) !void {
     var sign = Pss(Hash).Signature.fromBytes(sig);
     try sign.verify(alloc, msg, public_key, opts);
+}
+
+pub fn signX931(
+    alloc: Allocator,
+    secret_key: SecretKey,
+    comptime Hash: type,
+    msg: []const u8,
+) ![]u8 {
+    var st = X931(Hash).Signer.init(alloc, secret_key);
+    st.update(msg);
+    const sig = try st.finalize();
+
+    const siged = sig.toBytes();
+    return siged;
+}
+
+pub fn verifyX931(
+    alloc: Allocator,
+    public_key: PublicKey,
+    comptime Hash: type,
+    msg: []const u8,
+    sig: []u8,
+) !void {
+    var sign = X931(Hash).Signature.fromBytes(sig);
+    try sign.verify(alloc, msg, public_key);
 }
 
 // incCounter increments a four byte, big-endian counter.

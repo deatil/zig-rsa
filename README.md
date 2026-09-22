@@ -57,7 +57,7 @@ pub fn main(init: std.process.Init) !void {
     var prng = std.Random.DefaultPrng.init(0xC0FFEE_1234_5678);
     const random = prng.random();
 
-    const kp = try rsa.generate_key(alloc, random, 1024);
+    const kp = try rsa.generateKey(alloc, random, 1024);
 
     var secret_key = kp.secret_key;
     defer secret_key.deinit(alloc);
@@ -93,7 +93,7 @@ pub fn main(init: std.process.Init) !void {
 
 Generate key: 
 ~~~v
-generate_key(alloc: Allocator, random: Random, bits: usize) !KeyPair
+generateKey(alloc: Allocator, random: Random, bits: usize) !KeyPair
 ~~~
 
 PKCS1v15 sign: 

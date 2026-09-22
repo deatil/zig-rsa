@@ -15,12 +15,6 @@ pub fn byteLen(bits: usize) usize {
     return std.math.divCeil(usize, bits, 8) catch unreachable;
 }
 
-pub fn stripLeadingZeros(bytes: []const u8) []const u8 {
-    var i: usize = 0;
-    while (i < bytes.len and bytes[i] == 0) : (i += 1) {}
-    return bytes[i..];
-}
-
 pub fn cryptoRand(io: std.Io) std.Random {
     var random_bytes: [std.Random.Ascon.secret_seed_length]u8 = undefined;
     io.random(&random_bytes);
@@ -29,6 +23,12 @@ pub fn cryptoRand(io: std.Io) std.Random {
     const random = prng.random();
 
     return random;
+}
+
+pub fn stripLeadingZeros(bytes: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < bytes.len and bytes[i] == 0) : (i += 1) {}
+    return bytes[i..];
 }
 
 pub fn beToLimbs(comptime slot: usize, be: []const u8) [slot]u64 {

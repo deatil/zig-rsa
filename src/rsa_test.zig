@@ -489,13 +489,13 @@ test "rsa PSS function signature" {
     });
 }
 
-test "rsa PSS function signature with generate_key" {
+test "rsa PSS function signature with generateKey" {
     const alloc = testing.allocator;
     const io = testing.io;
 
     const random = utils.cryptoRand(io);
 
-    const kp = try rsa.generate_key(alloc, random, 1024);
+    const kp = try rsa.generateKey(alloc, random, 1024);
 
     var secret_key = kp.secret_key;
     defer secret_key.deinit(alloc);
@@ -852,7 +852,7 @@ fn test_publicKey_size() !void {
     const random = utils.cryptoRand(io);
 
     {
-        const kp = try rsa.generate_key(alloc, random, 512);
+        const kp = try rsa.generateKey(alloc, random, 512);
         try std.testing.expectEqual(64, kp.public_key.size());
 
         var secret_key = kp.secret_key;
@@ -860,7 +860,7 @@ fn test_publicKey_size() !void {
     }
 
     {
-        const kp = try rsa.generate_key(alloc, random, 1024);
+        const kp = try rsa.generateKey(alloc, random, 1024);
         try std.testing.expectEqual(128, kp.public_key.size());
 
         var secret_key = kp.secret_key;
@@ -868,7 +868,7 @@ fn test_publicKey_size() !void {
     }
 
     {
-        const kp = try rsa.generate_key(alloc, random, 2048);
+        const kp = try rsa.generateKey(alloc, random, 2048);
         try std.testing.expectEqual(256, kp.public_key.size());
 
         var secret_key = kp.secret_key;
@@ -876,7 +876,7 @@ fn test_publicKey_size() !void {
     }
 
     {
-        const kp = try rsa.generate_key(alloc, random, 4096);
+        const kp = try rsa.generateKey(alloc, random, 4096);
         try std.testing.expectEqual(512, kp.public_key.size());
 
         var secret_key = kp.secret_key;
@@ -1948,4 +1948,151 @@ test "decryptPublicKey check" {
     defer alloc.free(dec2);
 
     try testing.expectFmt("Hello RSA X9.31", "{s}", .{dec2});
+}
+
+test "signX931" {
+    const alloc = testing.allocator;
+
+    const prikey = "MIIBOgIBAAJBALKZD0nEffqM1ACuak0bijtqE2QrI/KLADv7l3kK3ppMyCuLKoF0fd7Ai2KW5ToIwzFofvJcS/STa6HA5gQenRUCAwEAAQJBAIq9amn00aS0h/CrjXqu/ThglAXJmZhOMPVn4eiu7/ROixi9sex436MaVeMqSNf7Ex9a8fRNfWss7Sqd9eWuRTUCIQDasvGASLqmjeffBNLTXV2A5g4t+kLVCpsEIZAycV5GswIhANEPLmax0ME/EO+ZJ79TJKN5yiGBRsv5yvx5UiHxajEXAiAhAol5N4EUyq6I9w1rYdhPMGpLfk7AIU2snfRJ6Nq2CQIgFrPsWRCkV+gOYcajD17rEqmuLrdIRexpg8N1DOSXoJ8CIGlStAboUGBxTDq3ZroNism3DaMIbKPyYrAqhKov1h5V";
+    const prikey_bytes = try base64Decode(alloc, prikey);
+
+    defer alloc.free(prikey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromDer(alloc, prikey_bytes);
+    const pub_key = pri_key.public_key;
+
+    defer pri_key.deinit(alloc);
+
+    const sha2 = std.crypto.hash.sha2;
+
+    {
+        const msg = "12345678abcde";
+
+        const signature = try rsa.signX931(alloc, pri_key, sha2.Sha256, msg);
+        try rsa.verifyX931(alloc, pub_key, sha2.Sha256, msg, signature);
+
+        defer alloc.free(signature);
+    }
+
+    {
+        const msg = "Test.\n";
+
+        const signature = try rsa.signX931(alloc, pri_key, sha2.Sha256, msg);
+        defer alloc.free(signature);
+
+        const siged = "34c63d9486d82d851b83f673994b51f7a59ae368653faa5b994c901948331ac3230b56f199e1046744c976ec7985b0581a96fa8deda775398223661a37f3c7af";
+        try testing.expectFmt(siged, "{x}", .{signature});
+    }
+
+    {
+        const check2 = "34c63d9486d82d851b83f673994b51f7a59ae368653faa5b994c901948331ac3230b56f199e1046744c976ec7985b0581a96fa8deda775398223661a37f3c7af";
+        var sig2: [256]u8 = undefined;
+        const sig2_res = try fmt.hexToBytes(&sig2, check2);
+
+        const msg = "Test.\n";
+
+        try rsa.verifyX931(alloc, pub_key, sha2.Sha256, msg, sig2_res);
+    }
+}
+
+test "signX931 check" {
+    const alloc = testing.allocator;
+
+    const prikey = "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCqNAuNDNT4nYxeJuL34+QCGn3yiJsefRWKHbX07+vcGWrbT3U2gmG2iyXdgcyMfGg5Qmy473d04Qqy94vwYHJdq6EALpNoZhSXQoEl6JGGYnGgMN/paO31o6T+TbPHaYak+PFNjnwYUQOu4sdWI4eJRjz12JoA4Upr3uQs4rN18xgU0IR0RgCG0i2cIwnjmYEyBQA+79C6Z3EZ8z7CpnTgt4HnkYaFGISXghJSYWyiK1Lw8CtqCrgkfyL5uO1pISi/QV0laZb2qW2xHubMuHBprqzRN/66JZZMDAEeoLl3Wb0asB9oR5ghKZ+cfDUxonKRR6vMGkBJxg5jCVwi+DR9AgMBAAECggEAH7qYjaie+iLapEGhDZ+q5XZ9VK2BJ1efoJIF1d21DSCi4jPnkKwRHafGfQrhsC3P+x6mKHqhvQTnyvGpYXwFTe99Eczc93kSLRl9fGzk1hW7g2ahE0DXnXNugmbHVS0Xp+DtkOz3NsxBgMRvbyAr99wDaLxCh1f4WPAh/rkbReknX70KzpfKh5JO2pg1ouYofZO6BF8BdXsxNvJkuI3LePdoJ7umK2/3RtsC6elek93ql7u0paZXtHiABjfbOPn6WzDdxYcaFfa9KQYviRPlj860JxO6WWRhjx6Y2hPjzHwqoLt3IhCFoPvNOr0wOrii3rIjkfZ+FIwjVxAsAhjq8QKBgQDo/w7l95TRJLjP/I2wSWH7+E6ackQPKUV0TZGbDoZG86aGKywgMjmAqdR8ZnRuprbmDE84DWiLwvmQayUfUf73k1AUXrbOgyCblCMoSEXV+Hf1RbgzgGk6wQXP0ZiyVb7uaGtuaV/Oh/qrJYauDKT18lX+4z67v9UHMT57ZPzikQKBgQC7Aed4tEfuQYDajusdc6UYqG8a4blVJrxbSZREGNHY/nyjGQBFyR3qKfzxdJY/hB87icATNa4leFTD+kHS5x5ZvCoB6tIIkwgugm9vY77DSamr3Mg9EORCnkhpue9B8kvt1LLxjecQ1ifc3/jAEAil62D02QPVEGtphE8bQszRLQKBgDETaCPwHhxfS74jSATVsBnOl1/YqZU38DUrEXxDdu0C7RRdi5HMgmgjXWpGekfEPcn+1cDMsjSeAMr2hn8uWjHziW6A9KhS3k9myHD3qB4Fk97JrJ7McV26wmqfjzYg8XJt9BLxhwiNg7MA2HlYmHZlcM+bNd997HTzXmHHR6zBAoGAV/a2VZ2fdB/Vp3iweWMLVoTr9h4VGkulL991YW63TrWuFN3OtgS7EIl9lGn9vpS8SDosYhzO9IscfC68RaM3MIiEzfARqbzXjWEHX8LwWVXN/KxWd/r5E6j2cNzoAQIi2xVAssTH2rCRgaDMljM0ji8gpStrVQ5rJ+/3ceBDDWUCgYAjB8wFW0Ci+VExf9UyCPiHJ8nmu//Uls7wBmK80C6vzh4mGHuBo6UV38k0evhkxUKLp+hJyoed0KQ3oMQ1T4kt7V9Q9dOkDoG8UzQexcfho71K/9DShCVTZDie7m5r50f/KedMYQuCvIjA9yk5pcYY53yKpPWjiBlznEAfI7ihrA==";
+    const prikey_bytes = try base64Decode(alloc, prikey);
+
+    defer alloc.free(prikey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromPKCS8Der(alloc, prikey_bytes);
+    const pub_key = pri_key.public_key;
+
+    defer pri_key.deinit(alloc);
+
+    const sha2 = std.crypto.hash.sha2;
+
+    {
+        const check2 = "4CF5776AA00705940A42EE50707C2EA5978ED289D449E1F28F937EC8A5EDE3D8F8F2EB9C0E5EC87E3EA23D1DCB4F87C0843766D6C1A53391676014B857E9DB09EC57D4C8A5ACFB81D33336F56F0032D6ADE46C567296B6ADB59E14AEBFD2D20C4D1D2604966063F61364546F68CE49E3AE71B027FA52CBDF7386C5C96F4F59B2E3D2D2B9F900EE5FD35FA127E7574A3055779D9C9178E327E0240A0FC530D6C877B87A101795F57168D1110CB97CE52F03113DBF0FC4B2F3FA3ECC10CA322A7FCBB3D70CDFF5F8B5DEC7B1860DC862A9F361AF56C3AE5B3074CDED0EB42323AFAC96647ECCFDAB5F4091257D089C776C60C367ACB1CC4BDBA899E24EBDDF6A67";
+        var sig2: [256]u8 = undefined;
+        const sig2_res = try fmt.hexToBytes(&sig2, check2);
+
+        const msg = "This is a message signed with RSA X9.31 + SHA-256.";
+
+        try rsa.verifyX931(alloc, pub_key, sha2.Sha256, msg, sig2_res);
+    }
+
+    {
+        const check2 = "4CF5776AA00705940A42EE50707C2EA5978ED289D449E1F28F937EC8A5EDE3D8F8F2EB9C0E5EC87E3EA23D1DCB4F87C0843766D6C1A53391676014B857E9DB09EC57D4C8A5ACFB81D33336F56F0032D6ADE46C567296B6ADB59E14AEBFD2D20C4D1D2604966063F61364546F68CE49E3AE71B027FA52CBDF7386C5C96F4F59B2E3D2D2B9F900EE5FD35FA127E7574A3055779D9C9178E327E0240A0FC530D6C877B87A101795F57168D1110CB97CE52F03113DBF0FC4B2F3FA3ECC10CA322A7FCBB3D70CDFF5F8B5DEC7B1860DC862A9F361AF56C3AE5B3074CDED0EB42323AFAC96647ECCFDAB5F4091257D089C776C60C367ACB1CC4BDBA899E24EBDDF6A67";
+        var sig2: [256]u8 = undefined;
+        const sig2_res = try fmt.hexToBytes(&sig2, check2);
+
+        const msg = "This is a message signed with RSA X9.31 + SHA-256.";
+
+        var hashed: [sha2.Sha256.digest_length]u8 = undefined;
+
+        var h = sha2.Sha256.init(.{});
+        h.update(msg);
+        h.final(&hashed);
+
+        var hashed2 = try alloc.alloc(u8, hashed.len + 1);
+        @memcpy(hashed2[0..][0..hashed.len], hashed[0..]);
+        hashed2[hashed2.len - 1] = 0x34;
+
+        defer alloc.free(hashed2);
+
+        try rsa.X931(sha2.Sha256).verifyPlain(alloc, pub_key, hashed2, sig2_res);
+    }
+}
+
+test "signX931 with generateX931Key" {
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    const random = utils.cryptoRand(io);
+
+    const kp = try rsa.generateX931Key(alloc, random, 1024);
+
+    var pri_key = kp.secret_key;
+    const pub_key = pri_key.public_key;
+
+    defer pri_key.deinit(alloc);
+
+    const sha2 = std.crypto.hash.sha2;
+
+    {
+        const msg = "12345678abcde";
+
+        const signature = try rsa.signX931(alloc, pri_key, sha2.Sha256, msg);
+        try rsa.verifyX931(alloc, pub_key, sha2.Sha256, msg, signature);
+
+        defer alloc.free(signature);
+    }
+}
+
+test "X931 signer signPlain" {
+    const alloc = testing.allocator;
+
+    const prikey = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDh/nCDmXaEqxN416b9XjV8acmbqA52uPzKbesWQRT/BPxEO2dKAURk5CkcSBDskvfzFR9TRjeDppjD1BPSEnuYKnP0SvmotoxcnBnHMfMBqGV8DSJyppu8k4y9C3MPq5C/rA8TJm0NNaJCL0BfAGkeyw+elgYifbRlm42VfYGsKVyIeEI9Qghk5Cf8yapMPfWNLKOhChXsyGExMBMonHZeseFH7UNwonNAFJMAaelhVqqmwBFqn6fBGKmvedRO7HIaiEFNKaMna6xJ5Bccjds4MhF7UC5PIdx4Bt7CfxvjrbIRYoBF2l30CNBblIhU992zPkHoaVhDkt1gq3OdO7LvAgMBAAECggEBALCJrWTv7ahnZ3efpqAIBuogTVBd8KaHjVmokds5jehFAbdfXClwYfgaT477MNVNXYmzN1w63sTl0DIxqiYRMCFHEHuGUg6cQ3tYqb50Y2spG9XTANTlF4UxEeDfX8ue7xz7kG8aNlf6TL084iEUVgmrAJGWikZJQjGZWPmtKC3OTeJY5Bev5qHVuMRe+XEM5aQc3ph+lXlOF0Qp0Eg8YRWprrev2faH6prMqu2JGomoac6sfM4QJhtEViF7Gw0XPthPTbF19IefuAwi9psMM/9CnQ+MTWN2i6IxoUdicsFuC+Wdlb3K5V/+uldNSr+ePEhcya+YTLK9IOcVwWKQHykCgYEA8XvuEribf+t0ZPtfxr+DC9nZHXbVoFx0/ARpSG+P/fp3Hn3rO9iYQ6OtZ9mEXTzf+dhYTaRWq6PbCOz6i0It+J8QSBdxU9OcQ4871mDe41IvSc1CCGMW4PeIYtNQEK0zrqhN7SMtKyUd7yAsYRCrIzMc7NjE2qJvFw5kh7xC3Q0CgYEA75Qjn5daNYSAOa/ILdOs5J/8oIaO27RNK/fSKm/btsMsyum8+YP/mWmm1MXBzG9WEKzZv5yEKOWCEVJYVsFQsGt9yLYW2WIKU5UxiuU0F1RImF/dphIbYOh7oGC3WfYKk2f+K7ftjc196ZkEkDuE2Xh1h75/67Mzztx1DbXj6OsCgYBcDRfFfyWXb5Og4smxo1M680H2H1RzmorlfnD7sbs733wE3Y8L8xanwf7Z9WqleA0Q2k1e22RGbWGTV3JyHzoS6d90+6qxf5qzjigLIkYUdUGdambfd5ZDD1ioA1Ej6kInM/TwjlYreiyc+LCyF36FHnjKOB9iEEU0jsH3k+YRCQKBgHMVLPuHX6zfhhyvxK/Gw4FbHKYbnNoKxRs+wvThoKAtJwIdv0n4TzppVttUV2CVhrkh3sM9MvrWLGGXtZmO6Oyl5dkZJuarQpydyRuYOCqQsQKI4lbY0c/+PQxwCQMsvi3KwXxMsM7yC+6/M0L5ZDp2s7ZOGvKktVlD6vJ4Eg+bAoGARnGGprSBW8dAb/s53r0paPh4k/bySrXdGEprLwk6g3S8+aylcmjUdjcIq4dEb4A/nv12dx1Sc4y99c62R0zi+TT6FYBIFDMz3HNVzO0Jr6SgC6CNVotL0D725CioR5U1NyTHHRLZth69HLuEZCZQlPJCbePXMRRHmOl1svzcVuo=";
+    const pubkey = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4f5wg5l2hKsTeNem/V41fGnJm6gOdrj8ym3rFkEU/wT8RDtnSgFEZOQpHEgQ7JL38xUfU0Y3g6aYw9QT0hJ7mCpz9Er5qLaMXJwZxzHzAahlfA0icqabvJOMvQtzD6uQv6wPEyZtDTWiQi9AXwBpHssPnpYGIn20ZZuNlX2BrClciHhCPUIIZOQn/MmqTD31jSyjoQoV7MhhMTATKJx2XrHhR+1DcKJzQBSTAGnpYVaqpsARap+nwRipr3nUTuxyGohBTSmjJ2usSeQXHI3bODIRe1AuTyHceAbewn8b462yEWKARdpd9AjQW5SIVPfdsz5B6GlYQ5LdYKtznTuy7wIDAQAB";
+
+    const prikey_bytes = try base64Decode(alloc, prikey);
+    const pubkey_bytes = try base64Decode(alloc, pubkey);
+
+    defer alloc.free(prikey_bytes);
+    defer alloc.free(pubkey_bytes);
+
+    var pri_key = try rsa.SecretKey.fromPKCS8Der(alloc, prikey_bytes);
+    const pub_key = try rsa.PublicKey.fromPKCS8Der(pubkey_bytes);
+
+    defer pri_key.deinit(alloc);
+
+    const msg = "rsa X931 signature";
+
+    const x931 = rsa.X931(TestHash);
+
+    const sig = try x931.signPlain(alloc, pri_key, msg);
+    try testing.expectEqual(true, sig.len > 0);
+
+    defer alloc.free(sig);
+
+    try x931.verifyPlain(alloc, pub_key, msg, sig);
 }
