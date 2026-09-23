@@ -17,16 +17,15 @@ pub fn xorBytes(dst: []u8, x: []const u8, y: []const u8) void {
 
 // constantTimeByteEq returns 1 when x == y.
 pub fn constantTimeByteEq(x: u8, y: u8) isize {
-    const xy = @as(u32, @intCast(x ^ y));
-    const xy2 = @subWithOverflow(xy, 1);
-    return @as(isize, @intCast(xy2[0] >> 31));
+    const xy: u32 = x ^ y;
+    return (xy -% 1) >> 31;
 }
 
 // constantTimeEq returns 1 when x == y.
 pub fn constantTimeEq(x: isize, y: isize) isize {
-    const xy = @as(u32, @intCast(x ^ y));
-    const xy2 = @subWithOverflow(@as(u64, @intCast(xy)), 1);
-    return @as(isize, @intCast(xy2[0] >> 63));
+    const xy: u32 = isizeToUsize(u32, x ^ y, 256 * 4);
+    const xy2: u64 = xy;
+    return @intCast((xy2 -% 1) >> 63);
 }
 
 // constantTimeSelect returns x when v == 1, and y when v == 0.
@@ -59,8 +58,8 @@ pub fn constantTimeCopy(v: isize, x: []u8, y: []const u8) !void {
         return error.ArraysHaveDifferentLengths;
     }
 
-    const xmask: u8 = @intCast(@mod((@mod((v - 1), 256) + 256), 256));
-    const ymask: u8 = @intCast(@mod((@mod((~(v - 1)), 256) + 256), 256));
+    const xmask: u8 = isizeToUsize(u8, v - 1, 256);
+    const ymask: u8 = isizeToUsize(u8, ~(v - 1), 256);
     for (0..x.len) |i| {
         x[i] = x[i] & xmask | y[i] & ymask;
     }
@@ -70,6 +69,10 @@ pub fn constantTimeCopy(v: isize, x: []u8, y: []const u8) !void {
 // it is undefined when x or y are negative, or > (2^32 - 1)
 pub fn constantTimeLessOrEq(x: isize, y: isize) isize {
     return ((x - y - 1) >> 31) & 1;
+}
+
+pub fn isizeToUsize(comptime T: type, x: isize, n: isize) T {
+    return @intCast(@mod((@mod((x), n) + n), n));
 }
 
 test "constantTimeByteEq" {
@@ -87,7 +90,9 @@ test "constantTimeEq" {
     try testing.expectEqual(1, constantTimeEq(65536, 65536));
     try testing.expectEqual(1, constantTimeEq(-1, -1));
     try testing.expectEqual(1, constantTimeEq(-256, -256));
+    try testing.expectEqual(0, constantTimeEq(-256, 256));
     try testing.expectEqual(0, constantTimeEq(0, 1));
+    try testing.expectEqual(0, constantTimeEq(7, -1));
 }
 
 test "constantTimeSelect" {
@@ -135,6 +140,10 @@ test "constantTimeLessOrEq" {
     try testing.expectEqual(0, constantTimeLessOrEq(2, 1));
     try testing.expectEqual(0, constantTimeLessOrEq(3, 2));
     try testing.expectEqual(0, constantTimeLessOrEq(255, 3));
+
+    try testing.expectEqual(1, constantTimeLessOrEq(-255, 3));
+    try testing.expectEqual(0, constantTimeLessOrEq(255, -3));
+    try testing.expectEqual(1, constantTimeLessOrEq(-255, -3));
 }
 
 test "xorBytes" {
