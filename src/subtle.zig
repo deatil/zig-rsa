@@ -1,16 +1,17 @@
 const std = @import("std");
 const testing = std.testing;
 
-// dst must < x and < y
-pub fn xorBytes(dst: []u8, x: []const u8, y: []const u8) void {
-    if (dst.len > x.len or dst.len > y.len) {
-        return;
+// dst = x ^ y
+pub fn xorBytes(dst: []u8, x: []const u8, y: []const u8) !void {
+    const num = @min(x.len, y.len);
+    if (dst.len < num) {
+        return error.DstTooShort;
     }
 
-    const xx = x[0..dst.len];
-    const yy = y[0..dst.len];
+    const xx = x[0..num];
+    const yy = y[0..num];
 
-    for (0..dst.len) |i| {
+    for (0..num) |i| {
         dst[i] = xx[i] ^ yy[i];
     }
 }
@@ -102,7 +103,7 @@ test "constantTimeSelect" {
     try testing.expectEqual(2, constantTimeSelect(1, 2, 0));
     try testing.expectEqual(2, constantTimeSelect(1, 2, 255));
     try testing.expectEqual(2, constantTimeSelect(1, 2, 255 * 255));
-    
+
     try testing.expectEqual(0, constantTimeSelect(0, 1, 0));
     try testing.expectEqual(255, constantTimeSelect(0, 1, 255));
     try testing.expectEqual(255 * 255, constantTimeSelect(0, 1, 255 * 255));
@@ -112,21 +113,21 @@ test "constantTimeSelect" {
 }
 
 test "constantTimeCompare" {
-    try testing.expectEqual(1, constantTimeCompare(&.{1, 2, 3}, &.{1, 2, 3}));
-    try testing.expectEqual(0, constantTimeCompare(&.{1, 2, 3}, &.{1, 2, 9}));
-    try testing.expectEqual(0, constantTimeCompare(&.{1, 2, 3}, &.{1, 2, 3, 4}));
-    try testing.expectEqual(0, constantTimeCompare(&.{1, 2, 3}, &.{1, 2}));
+    try testing.expectEqual(1, constantTimeCompare(&.{ 1, 2, 3 }, &.{ 1, 2, 3 }));
+    try testing.expectEqual(0, constantTimeCompare(&.{ 1, 2, 3 }, &.{ 1, 2, 9 }));
+    try testing.expectEqual(0, constantTimeCompare(&.{ 1, 2, 3 }, &.{ 1, 2, 3, 4 }));
+    try testing.expectEqual(0, constantTimeCompare(&.{ 1, 2, 3 }, &.{ 1, 2 }));
 }
 
 test "constantTimeCopy" {
-	const y = [_]u8{3, 4, 5};
-	var x: [3]u8 = [_]u8{0} ** 3;
-	try constantTimeCopy(0, x[0..], y[0..]);
+    const y = [_]u8{ 3, 4, 5 };
+    var x: [3]u8 = [_]u8{0} ** 3;
+    try constantTimeCopy(0, x[0..], y[0..]);
     try testing.expectEqual([_]u8{0} ** 3, x);
 
-	try constantTimeCopy(1, x[0..], y[0..]);
+    try constantTimeCopy(1, x[0..], y[0..]);
     try testing.expectEqual(y, x);
-    try testing.expectEqual([_]u8{3, 4, 5}, x);
+    try testing.expectEqual([_]u8{ 3, 4, 5 }, x);
 }
 
 test "constantTimeLessOrEq" {
@@ -147,11 +148,43 @@ test "constantTimeLessOrEq" {
 }
 
 test "xorBytes" {
-    const x = [_]u8{1, 6, 7, 8, 8};
-    const y = [_]u8{1, 6, 7, 8, 32};
+    {
+        const x = [_]u8{ 1, 6, 7, 8, 8 };
+        const y = [_]u8{ 1, 6, 7, 8, 32 };
 
-	var res: [5]u8 = [_]u8{0} ** 5;
+        var res: [5]u8 = [_]u8{0} ** 5;
 
-	xorBytes(res[0..], x[0..], y[0..]);
-    try testing.expectFmt("0000000028", "{x}", .{res});
+        try xorBytes(res[0..], x[0..], y[0..]);
+        try testing.expectFmt("0000000028", "{x}", .{res});
+    }
+
+    {
+        const x = [_]u8{ 1, 6, 7, 8, 8 };
+        const y = [_]u8{ 1, 98, 7, 8, 32 };
+
+        var res: [7]u8 = [_]u8{0} ** 7;
+
+        try xorBytes(res[0..], x[0..], y[0..]);
+        try testing.expectFmt("0064000028", "{x}", .{res[0..5]});
+    }
+
+    {
+        const x = [_]u8{ 1, 6, 7, 8, 8 };
+        const y = [_]u8{ 1, 98, 7, 8, 32, 12 };
+
+        var res: [7]u8 = [_]u8{0} ** 7;
+
+        try xorBytes(res[0..], x[0..], y[0..]);
+        try testing.expectFmt("0064000028", "{x}", .{res[0..5]});
+    }
+
+    {
+        const x = [_]u8{ 1, 6, 7, 8, 8, 0, 85, 8 };
+        const y = [_]u8{ 1, 98, 7, 8, 32, 12, 7, 65, 12, 78 };
+
+        var res: [7]u8 = [_]u8{0} ** 7;
+
+        const res2 = xorBytes(res[0..], x[0..], y[0..]);
+        try testing.expectError(error.DstTooShort, res2);
+    }
 }
