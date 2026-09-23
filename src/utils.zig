@@ -107,11 +107,10 @@ pub fn modulusFromBig(x: *const BigInt) !Modulus {
 // rem = e % m
 pub fn bigMod(alloc: Allocator, e: *const BigInt, m: *const BigInt) !BigInt {
     var quot = try newBig(alloc);
-    var rem = try newBig(alloc);
-
-    try quot.divFloor(&rem, e, m);
-
     defer quot.deinit();
+    
+    var rem = try newBig(alloc);
+    try quot.divFloor(&rem, e, m);
 
     return rem;
 }
@@ -120,25 +119,31 @@ pub fn bigMod(alloc: Allocator, e: *const BigInt, m: *const BigInt) !BigInt {
 pub fn bigModInverse(alloc: Allocator, e: *const BigInt, m: *const BigInt) !BigInt {
     // Invariants: t0*e ≡ r0, t1*e ≡ r1 (mod m).
     var r0 = try newBig(alloc);
-    try r0.copy(m.toConst());
-    var r1 = try newBig(alloc);
-    try r1.copy(e.toConst());
-    var t0 = try newBig(alloc);
-    try t0.set(0);
-    var t1 = try newBig(alloc);
-    try t1.set(1);
-    var quot = try newBig(alloc);
-    var rem = try newBig(alloc);
-    var tmp = try newBig(alloc);
-    var new_t = try newBig(alloc);
-
     defer r0.deinit();
+    try r0.copy(m.toConst());
+
+    var r1 = try newBig(alloc);
     defer r1.deinit();
+    try r1.copy(e.toConst());
+
+    var t0 = try newBig(alloc);
     defer t0.deinit();
+    try t0.set(0);
+
+    var t1 = try newBig(alloc);
     defer t1.deinit();
+    try t1.set(1);
+
+    var quot = try newBig(alloc);
     defer quot.deinit();
+    
+    var tmp = try newBig(alloc);
     defer tmp.deinit();
+    
+    var new_t = try newBig(alloc);
     defer new_t.deinit();
+    
+    var rem = try newBig(alloc);
 
     while (!r1.eqlZero()) {
         try quot.divFloor(&rem, &r0, &r1);

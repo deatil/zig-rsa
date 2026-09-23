@@ -170,6 +170,7 @@ pub const SecretKey = struct {
 
         if (self.precomputed) |precomputed| {
             alloc.free(precomputed.crt_values);
+            self.precomputed = null;
         }
     }
 
@@ -391,28 +392,28 @@ pub const SecretKey = struct {
         }
 
         var bd = try utils.bigFromFe(alloc, self.d);
-        var bp = try utils.bigFromFe(alloc, self.primes[0]);
-        var bq = try utils.bigFromFe(alloc, self.primes[1]);
-
         defer bd.deinit();
+        
+        var bp = try utils.bigFromFe(alloc, self.primes[0]);
         defer bp.deinit();
+        
+        var bq = try utils.bigFromFe(alloc, self.primes[1]);
         defer bq.deinit();
 
         var quot = try utils.newBig(alloc);
+        defer quot.deinit();
 
         // dP = d mod (p-1)
         var bdp = try utils.newBig(alloc);
+        defer bdp.deinit();
         try bdp.addScalar(&bp, -1);
         try quot.divFloor(&bdp, &bd, &bdp);
 
         // dQ = d mod (q-1)
         var bdq = try utils.newBig(alloc);
+        defer bdq.deinit();
         try bdq.addScalar(&bq, -1);
         try quot.divFloor(&bdq, &bd, &bdq);
-
-        defer quot.deinit();
-        defer bdp.deinit();
-        defer bdq.deinit();
 
         const dp = try utils.feFromBig(self.public_key.n, &bdp);
         const dq = try utils.feFromBig(self.public_key.n, &bdq);
@@ -430,14 +431,14 @@ pub const SecretKey = struct {
             return error.RsaPrecomputeFail;
         }
 
-        var crts = [_]CRTValue{};
+        const crts = try alloc.alloc(CRTValue, 0);
 
         const precomputed: PrecomputedValues = .{
             .dp = dp,
             .dq = dq,
             .qinv = qinv,
 
-            .crt_values = &crts,
+            .crt_values = crts,
         };
 
         self.precomputed = precomputed;
@@ -450,28 +451,28 @@ pub const SecretKey = struct {
         }
 
         var bd = try utils.bigFromFe(alloc, self.d);
-        var bp = try utils.bigFromFe(alloc, self.primes[0]);
-        var bq = try utils.bigFromFe(alloc, self.primes[1]);
-
         defer bd.deinit();
+
+        var bp = try utils.bigFromFe(alloc, self.primes[0]);
         defer bp.deinit();
+
+        var bq = try utils.bigFromFe(alloc, self.primes[1]);
         defer bq.deinit();
 
         var quot = try utils.newBig(alloc);
+        defer quot.deinit();
 
         // dP = d mod (p-1)
         var bdp = try utils.newBig(alloc);
+        defer bdp.deinit();
         try bdp.addScalar(&bp, -1);
         try quot.divFloor(&bdp, &bd, &bdp);
 
         // dQ = d mod (q-1)
         var bdq = try utils.newBig(alloc);
+        defer bdq.deinit();
         try bdq.addScalar(&bq, -1);
         try quot.divFloor(&bdq, &bd, &bdq);
-
-        defer quot.deinit();
-        defer bdp.deinit();
-        defer bdq.deinit();
 
         const dp = try utils.feFromBig(self.public_key.n, &bdp);
         const dq = try utils.feFromBig(self.public_key.n, &bdq);
@@ -484,7 +485,6 @@ pub const SecretKey = struct {
         defer bqinv.deinit();
 
         const qinv = try utils.feFromBig(self.public_key.n, &bqinv);
-
         if (qinv.isZero()) {
             return error.RsaPrecomputeFail;
         }
@@ -503,9 +503,9 @@ pub const SecretKey = struct {
             defer prime.deinit();
 
             var exp = try utils.newBig(alloc);
+            defer exp.deinit();
             try exp.addScalar(&prime, -1);
             try quot.divFloor(&exp, &bd, &exp);
-            defer exp.deinit();
 
             var coeff = try utils.bigModInverse(alloc, &r, &prime);
             defer coeff.deinit();
@@ -613,17 +613,26 @@ pub const KeyPair = struct {
             }
 
             var bp = try utils.bigFromBytes(alloc, pb);
+            defer bp.deinit();
+
             var bq = try utils.bigFromBytes(alloc, qb);
+            defer bq.deinit();
+
             var be = try utils.bigFromBytes(alloc, eb);
+            defer be.deinit();
+
+            // p == q
             if (bp.order(bq) == .eq) {
                 continue;
-            } // p == q
+            }
 
             var bn = try utils.newBig(alloc);
+            defer bn.deinit();
             try bn.mul(&bp, &bq);
             if (bn.bitCountAbs() > max_modulus_bits) {
                 continue;
             }
+
             var n_buf: [max_modulus_len]u8 = undefined;
             bn.toConst().writeTwosComplement(&n_buf, .big);
             const n = Modulus.fromBytes(&n_buf, .big) catch {
@@ -632,34 +641,37 @@ pub const KeyPair = struct {
 
             // λ(n) = lcm(p-1, q-1) = (p-1)(q-1) / gcd(p-1, q-1).
             var p1 = try utils.newBig(alloc);
+            defer p1.deinit();
             try p1.addScalar(&bp, -1);
+
             var q1 = try utils.newBig(alloc);
+            defer q1.deinit();
             try q1.addScalar(&bq, -1);
+
             var g = try utils.newBig(alloc);
+            defer g.deinit();
             try g.gcd(&p1, &q1);
+
             var phi = try utils.newBig(alloc);
+            defer phi.deinit();
             try phi.mul(&p1, &q1);
+
             var lambda = try utils.newBig(alloc);
+            defer lambda.deinit();
+            
             var rem = try utils.newBig(alloc);
-            try lambda.divFloor(&rem, &phi, &g); // exact: g | (p-1)(q-1)
+            defer rem.deinit();
+
+            // exact: g | (p-1)(q-1)
+            try lambda.divFloor(&rem, &phi, &g);
 
             // d = e⁻¹ mod λ(n); also proves gcd(e, λ(n)) = 1.
             var bd = try utils.bigModInverse(alloc, &be, &lambda);
+            defer bd.deinit();
+
             if (bd.eqlZero()) {
                 continue;
             }
-
-            defer bp.deinit();
-            defer bq.deinit();
-            defer be.deinit();
-            defer bn.deinit();
-            defer p1.deinit();
-            defer q1.deinit();
-            defer g.deinit();
-            defer phi.deinit();
-            defer lambda.deinit();
-            defer rem.deinit();
-            defer bd.deinit();
 
             const d = try utils.feFromBig(n, &bd);
 
@@ -706,18 +718,30 @@ pub const KeyPair = struct {
             }
         }
 
+        var prime_num: usize = 0;
+
         var primes = try alloc.alloc(BigInt, nprimes);
+        for (0..prime_num) |i| {
+            var primeMut = primes[i];
+            defer primeMut.deinit();
+        }
         defer alloc.free(primes);
 
-        var eInt = try utils.bigFromInt(alloc, e);
-        defer eInt.deinit();
+        var e_int = try utils.bigFromInt(alloc, e);
+        defer e_int.deinit();
 
         var primeBuf: [max_modulus_len]u8 = undefined;
 
         var priv: Self = undefined;
 
         while (true) {
+            for (0..prime_num) |i| {
+                var primeMut = primes[i];
+                defer primeMut.deinit();
+            }
+
             var todo = bits;
+            prime_num = 0;
 
             if (nprimes >= 7) {
                 todo += @divFloor((nprimes - 2), 5);
@@ -728,7 +752,6 @@ pub const KeyPair = struct {
                 const primCount = todo / (nprimes - i);
                 const primeLen = utils.byteLen(primCount);
 
-                // todo: when std have check randPrime api
                 const primeBytes = primeBuf[0..primeLen];
                 utils.generatePrime(random, primCount, e, primeBytes);
                 // try utils.randPrime(random, primCount, primeBytes);
@@ -739,6 +762,8 @@ pub const KeyPair = struct {
 
                 primes[i] = try utils.bigFromBytes(alloc, pb);
                 todo -= primes[i].bitCountAbs();
+
+                prime_num += 1;
             }
 
             for (primes, 0..) |prime, ii| {
@@ -751,17 +776,18 @@ pub const KeyPair = struct {
             }
 
             var n = try utils.bigFromInt(alloc, 1);
-            var totient = try utils.bigFromInt(alloc, 1);
-
             defer n.deinit();
+            
+            var totient = try utils.bigFromInt(alloc, 1);
             defer totient.deinit();
 
             for (primes) |prime| {
                 try n.mul(&n, &prime);
 
                 var pminus1 = try utils.newBig(alloc);
-                try pminus1.addScalar(&prime, -1);
                 defer pminus1.deinit();
+                
+                try pminus1.addScalar(&prime, -1);
 
                 try totient.mul(&totient, &pminus1);
             }
@@ -770,13 +796,13 @@ pub const KeyPair = struct {
                 continue;
             }
 
-            var d = utils.bigModInverse(alloc, &eInt, &totient) catch {
+            var d = utils.bigModInverse(alloc, &e_int, &totient) catch {
                 continue;
             };
             defer d.deinit();
 
             const nMod = try utils.modulusFromBig(&n);
-            const eFe = try utils.feFromBig(nMod, &eInt);
+            const eFe = try utils.feFromBig(nMod, &e_int);
             const dFe = try utils.feFromBig(nMod, &d);
 
             var primesFe = try alloc.alloc(Fe, nprimes);
@@ -835,9 +861,9 @@ pub const KeyPair = struct {
         const q_bytes = q_buf[0..half_len];
 
         var big4 = try utils.bigFromInt(alloc, 4);
-        var big3 = try utils.bigFromInt(alloc, 3);
-
         defer big4.deinit();
+        
+        var big3 = try utils.bigFromInt(alloc, 3);
         defer big3.deinit();
 
         while (true) {
@@ -867,11 +893,12 @@ pub const KeyPair = struct {
             }
 
             var bp = try utils.bigFromBytes(alloc, pb);
-            var bq = try utils.bigFromBytes(alloc, qb);
-            var be = try utils.bigFromBytes(alloc, eb);
-
             defer bp.deinit();
+            
+            var bq = try utils.bigFromBytes(alloc, qb);
             defer bq.deinit();
+            
+            var be = try utils.bigFromBytes(alloc, eb);
             defer be.deinit();
 
             // p == q
@@ -894,6 +921,7 @@ pub const KeyPair = struct {
 
             var bn = try utils.newBig(alloc);
             defer bn.deinit();
+
             try bn.mul(&bp, &bq);
             if (bn.bitCountAbs() > max_modulus_bits) {
                 continue;
@@ -907,31 +935,37 @@ pub const KeyPair = struct {
 
             // λ(n) = lcm(p-1, q-1) = (p-1)(q-1) / gcd(p-1, q-1).
             var p1 = try utils.newBig(alloc);
-            try p1.addScalar(&bp, -1);
-            var q1 = try utils.newBig(alloc);
-            try q1.addScalar(&bq, -1);
-            var g = try utils.newBig(alloc);
-            try g.gcd(&p1, &q1);
-            var phi = try utils.newBig(alloc);
-            try phi.mul(&p1, &q1);
-            var lambda = try utils.newBig(alloc);
-            var rem = try utils.newBig(alloc);
-            try lambda.divFloor(&rem, &phi, &g); // exact: g | (p-1)(q-1)
-
             defer p1.deinit();
+            try p1.addScalar(&bp, -1);
+
+            var q1 = try utils.newBig(alloc);
             defer q1.deinit();
+            try q1.addScalar(&bq, -1);
+
+            var g = try utils.newBig(alloc);
             defer g.deinit();
+            try g.gcd(&p1, &q1);
+
+            var phi = try utils.newBig(alloc);
             defer phi.deinit();
+            try phi.mul(&p1, &q1);
+
+            var lambda = try utils.newBig(alloc);
             defer lambda.deinit();
+
+            var rem = try utils.newBig(alloc);
             defer rem.deinit();
+
+            // exact: g | (p-1)(q-1)
+            try lambda.divFloor(&rem, &phi, &g); 
 
             // d = e⁻¹ mod λ(n); also proves gcd(e, λ(n)) = 1.
             var bd = try utils.bigModInverse(alloc, &be, &lambda);
+            defer bd.deinit();
+            
             if (bd.eqlZero()) {
                 continue;
             }
-
-            defer bd.deinit();
 
             const d = try utils.feFromBig(n, &bd);
 
@@ -1098,14 +1132,15 @@ pub const Crypt = struct {
 
         if (padding == .x931_padding) {
             var nn = try utils.bigFromModulus(alloc, n);
+            defer nn.deinit();
+            
             var cc = try utils.bigFromFe(alloc, c);
+            defer cc.deinit();
 
             var f = try utils.newBig(alloc);
-            try f.sub(&nn, &cc);
-
-            defer nn.deinit();
-            defer cc.deinit();
             defer f.deinit();
+
+            try f.sub(&nn, &cc);
 
             if (f.order(cc) == .lt) {
                 c = try utils.feFromBig(n, &f);
@@ -1128,25 +1163,26 @@ pub const Crypt = struct {
         var m = try n.pow(c, public_key.e);
 
         var bigint15 = try utils.bigFromInt(alloc, 0xf);
+        defer bigint15.deinit();
+        
         var mm = try utils.bigFromFe(alloc, m);
+        defer mm.deinit();
 
         var mLast4bit = try utils.newBig(alloc);
-        try mLast4bit.bitAnd(&mm, &bigint15);
-
-        defer bigint15.deinit();
-        defer mm.deinit();
         defer mLast4bit.deinit();
+        
+        try mLast4bit.bitAnd(&mm, &bigint15);
 
         // it is true if (m & 0xf) != 12
         const mLast4bitInt = try mLast4bit.toInt(i32);
         if ((padding == .x931_padding) and (mLast4bitInt != 12)) {
             var nn = try utils.bigFromModulus(alloc, n);
+            defer nn.deinit();
 
             var f = try utils.newBig(alloc);
-            try f.sub(&nn, &mm);
-
-            defer nn.deinit();
             defer f.deinit();
+            
+            try f.sub(&nn, &mm);
 
             m = try utils.feFromBig(n, &f);
         }
