@@ -123,11 +123,7 @@ pub fn formatBigintBytes(alloc: Allocator, bytes: []const u8) ![]const u8 {
 }
 
 pub fn getBitstringPadding(b: []const u8) u3 {
-    if (b.len == 0) {
-        return 0;
-    }
-
-    const pad_len = 8 - @mod(b.len, 8);
+    const pad_len = @mod(8 - @mod(8 * b.len, 8), 8);
     return @intCast(pad_len);
 }
 

@@ -181,7 +181,7 @@ pub const PublicKey = struct {
         const value: PkixPublicKey = .{
             .algo = algo_id,
             .bit_string = .{ 
-                // .right_padding = utils.getBitstringPadding(pubkey), 
+                .right_padding = utils.getBitstringPadding(pubkey), 
                 .bytes = pubkey, 
             },
         };
