@@ -91,6 +91,19 @@ pub fn main(init: std.process.Init) !void {
 
 ### RSA functions
 
+Parse key der: 
+~~~v
+var pri_key = try SecretKey.fromDer(prikey_bytes);
+var pri_key = try SecretKey.fromPKCS8Der(prikey_bytes);
+
+defer pri_key.deinit(alloc);
+~~~
+
+~~~v
+const pub_key = try PublicKey.fromDer(pubkey_bytes);
+const pub_key = try PublicKey.fromPKCS8Der(pubkey_bytes);
+~~~
+
 Generate key: 
 ~~~v
 generateKey(alloc: Allocator, random: Random, bits: usize) !KeyPair
