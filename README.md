@@ -92,25 +92,25 @@ pub fn main(init: std.process.Init) !void {
 ### RSA functions
 
 Parse key der: 
-~~~v
+~~~zig
 var pri_key = try SecretKey.fromDer(prikey_bytes);
 var pri_key = try SecretKey.fromPKCS8Der(prikey_bytes);
 
 defer pri_key.deinit(alloc);
 ~~~
 
-~~~v
+~~~zig
 const pub_key = try PublicKey.fromDer(pubkey_bytes);
 const pub_key = try PublicKey.fromPKCS8Der(pubkey_bytes);
 ~~~
 
 Generate key: 
-~~~v
+~~~zig
 generateKey(alloc: Allocator, random: Random, bits: usize) !KeyPair
 ~~~
 
 PKCS1v15 sign: 
-~~~v
+~~~zig
 signPkcs1v15(
     alloc: Allocator,
     secret_key: SecretKey,
@@ -119,7 +119,7 @@ signPkcs1v15(
 ) ![]u8
 ~~~
 
-~~~v
+~~~zig
 verifyPkcs1v15(
     alloc: Allocator,
     public_key: PublicKey,
@@ -130,14 +130,14 @@ verifyPkcs1v15(
 ~~~
 
 PSS sign: 
-~~~v
+~~~zig
 pub const PSSOptions = struct {
     salt_leng: isize = 0,
     salt: ?[]const u8 = null,
 };
 ~~~
 
-~~~v
+~~~zig
 pub fn signPss(
     alloc: Allocator,
     random: Random,
@@ -148,7 +148,7 @@ pub fn signPss(
 ) ![]u8
 ~~~
 
-~~~v
+~~~zig
 pub fn verifyPss(
     alloc: Allocator,
     public_key: PublicKey,
@@ -160,7 +160,7 @@ pub fn verifyPss(
 ~~~
 
 PKCS1v15 encrypt: 
-~~~v
+~~~zig
 encryptPkcs1v15(
     alloc: Allocator,
     random: std.Random,
@@ -169,7 +169,7 @@ encryptPkcs1v15(
 ) ![]const u8
 ~~~
 
-~~~v
+~~~zig
 pub fn decryptPkcs1v15(
     alloc: Allocator,
     secret_key: SecretKey,
@@ -178,7 +178,7 @@ pub fn decryptPkcs1v15(
 ~~~
 
 OAEP encrypt: 
-~~~v
+~~~zig
 encryptOaep(
     alloc: Allocator,
     random: std.Random,
@@ -189,7 +189,7 @@ encryptOaep(
 ) ![]const u8
 ~~~
 
-~~~v
+~~~zig
 decryptOaep(
     alloc: Allocator,
     secret_key: SecretKey,
