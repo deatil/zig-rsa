@@ -106,12 +106,12 @@ const pub_key = try PublicKey.fromPKCS8Der(pubkey_bytes);
 
 Generate key: 
 ~~~zig
-generateKey(alloc: Allocator, random: Random, bits: usize) !KeyPair
+pub fn generateKey(alloc: Allocator, random: Random, bits: usize) !KeyPair
 ~~~
 
 PKCS1v15 sign: 
 ~~~zig
-signPkcs1v15(
+pub fn signPkcs1v15(
     alloc: Allocator,
     secret_key: SecretKey,
     comptime Hash: type,
@@ -120,7 +120,7 @@ signPkcs1v15(
 ~~~
 
 ~~~zig
-verifyPkcs1v15(
+pub fn verifyPkcs1v15(
     alloc: Allocator,
     public_key: PublicKey,
     comptime Hash: type,
@@ -161,7 +161,7 @@ pub fn verifyPss(
 
 PKCS1v15 encrypt: 
 ~~~zig
-encryptPkcs1v15(
+pub fn encryptPkcs1v15(
     alloc: Allocator,
     random: std.Random,
     public_key: PublicKey,
@@ -179,7 +179,7 @@ pub fn decryptPkcs1v15(
 
 OAEP encrypt: 
 ~~~zig
-encryptOaep(
+pub fn encryptOaep(
     alloc: Allocator,
     random: std.Random,
     public_key: PublicKey,
@@ -190,7 +190,7 @@ encryptOaep(
 ~~~
 
 ~~~zig
-decryptOaep(
+pub fn decryptOaep(
     alloc: Allocator,
     secret_key: SecretKey,
     comptime Hash: type,
