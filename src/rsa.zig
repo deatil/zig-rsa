@@ -504,6 +504,12 @@ pub const SecretKey = struct {
             return error.RsaInvalidKey;
         }
 
+        // free data when this precompute
+        if (self.precomputed) |precomputed| {
+            alloc.free(precomputed.crt_values);
+            self.precomputed = null;
+        }
+
         if (self.primes.len > 2) {
             return self.precomputeLegacy(alloc);
         }
@@ -565,12 +571,6 @@ pub const SecretKey = struct {
     fn precomputeLegacy(self: *Self, alloc: Allocator) !void {
         if (self.primes.len < 2) {
             return error.RsaInvalidKey;
-        }
-
-        // free data for next
-        if (self.precomputed) |precomputed| {
-            alloc.free(precomputed.crt_values);
-            self.precomputed = null;
         }
 
         var bd = try utils.bigFromFe(alloc, self.d);
