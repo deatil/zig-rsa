@@ -121,9 +121,10 @@ test "constantTimeCompare" {
 
 test "constantTimeCopy" {
     const y = [_]u8{ 3, 4, 5 };
-    var x: [3]u8 = [_]u8{0} ** 3;
+    var x: [3]u8 = @splat(0);
+    const x2: [3]u8 = @splat(0);
     try constantTimeCopy(0, x[0..], y[0..]);
-    try testing.expectEqual([_]u8{0} ** 3, x);
+    try testing.expectEqual(x2, x);
 
     try constantTimeCopy(1, x[0..], y[0..]);
     try testing.expectEqual(y, x);
@@ -152,7 +153,7 @@ test "xorBytes" {
         const x = [_]u8{ 1, 6, 7, 8, 8 };
         const y = [_]u8{ 1, 6, 7, 8, 32 };
 
-        var res: [5]u8 = [_]u8{0} ** 5;
+        var res: [5]u8 = @splat(0);
 
         try xorBytes(res[0..], x[0..], y[0..]);
         try testing.expectFmt("0000000028", "{x}", .{res});
@@ -162,7 +163,7 @@ test "xorBytes" {
         const x = [_]u8{ 1, 6, 7, 8, 8 };
         const y = [_]u8{ 1, 98, 7, 8, 32 };
 
-        var res: [7]u8 = [_]u8{0} ** 7;
+        var res: [7]u8 = @splat(0);
 
         try xorBytes(res[0..], x[0..], y[0..]);
         try testing.expectFmt("0064000028", "{x}", .{res[0..5]});
@@ -172,7 +173,7 @@ test "xorBytes" {
         const x = [_]u8{ 1, 6, 7, 8, 8 };
         const y = [_]u8{ 1, 98, 7, 8, 32, 12 };
 
-        var res: [7]u8 = [_]u8{0} ** 7;
+        var res: [7]u8 = @splat(0);
 
         try xorBytes(res[0..], x[0..], y[0..]);
         try testing.expectFmt("0064000028", "{x}", .{res[0..5]});
@@ -182,7 +183,7 @@ test "xorBytes" {
         const x = [_]u8{ 1, 6, 7, 8, 8, 0, 85, 8 };
         const y = [_]u8{ 1, 98, 7, 8, 32, 12, 7, 65, 12, 78 };
 
-        var res: [7]u8 = [_]u8{0} ** 7;
+        var res: [7]u8 = @splat(0);
 
         const res2 = xorBytes(res[0..], x[0..], y[0..]);
         try testing.expectError(error.DstTooShort, res2);

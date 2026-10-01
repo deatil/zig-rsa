@@ -32,7 +32,7 @@ pub fn stripLeadingZeros(bytes: []const u8) []const u8 {
 }
 
 pub fn beToLimbs(comptime slot: usize, be: []const u8) [slot]u64 {
-    var v = [_]u64{0} ** slot;
+    var v: [slot]u64 = @splat(0);
     var idx: usize = 0;
     var i: usize = be.len;
     while (i > 0) : (idx += 8) {
@@ -102,6 +102,51 @@ pub fn modulusFromBig(x: *const BigInt) !Modulus {
     var buf: [max_modulus_len]u8 = undefined;
     x.toConst().writeTwosComplement(&buf, .big);
     return Modulus.fromBytes(&buf, .big);
+}
+
+pub fn formatBigintBytes(alloc: Allocator, bytes: []const u8) ![]const u8 {
+    if (bytes.len == 0) {
+        return alloc.dupe(u8, bytes);
+    }
+
+    var buf = try alloc.alloc(u8, bytes.len + 1);
+    defer alloc.free(buf);
+
+    @memcpy(buf[1..], bytes);
+
+    if (bytes.len > 0 and bytes[0]&0x80 != 0) {
+        buf[0] = 0x00;
+        return alloc.dupe(u8, buf[0..]);
+    }
+
+    return alloc.dupe(u8, buf[1..]);
+}
+
+pub fn getBitstringPadding(b: []const u8) u3 {
+    if (b.len == 0) {
+        return 0;
+    }
+
+    const pad_len = 8 - @mod(b.len, 8);
+    return @intCast(pad_len);
+}
+
+pub fn bytesFromModulus(alloc: Allocator, mod: Modulus) ![]const u8 {
+    var buf: [max_modulus_len]u8 = undefined;
+    try mod.toBytes(&buf, .big);
+    const new_buf = stripLeadingZeros(&buf);
+
+    const res = try formatBigintBytes(alloc, new_buf);
+    return res;
+}
+
+pub fn bytesFromFe(alloc: Allocator, fe: Fe) ![]const u8 {
+    var buf: [max_modulus_len]u8 = undefined;
+    try fe.toBytes(&buf, .big);
+    const new_buf = stripLeadingZeros(&buf);
+
+    const res = try formatBigintBytes(alloc, new_buf);
+    return res;
 }
 
 // rem = e % m
@@ -216,7 +261,7 @@ const mr_rounds = 64;
 const sieve_primes = blk: {
     @setEvalBranchQuota(20_000);
     const limit = 1024;
-    var composite = [_]bool{false} ** limit;
+    var composite: [limit]bool = @splat(false);
     var count: usize = 0;
 
     var i: usize = 3;

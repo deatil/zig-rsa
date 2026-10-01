@@ -34,20 +34,48 @@ pub const X931Sha256 = X931(sha2.Sha256);
 pub const X931Sha384 = X931(sha2.Sha384);
 pub const X931Sha512 = X931(sha2.Sha512);
 
+const Pkcs1AdditionalRSAPrime = struct {
+    prime: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    exp: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    coeff: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+};
+
 // Pkcs1PrivateKey is a structure which mirrors the PKCS #1 ASN.1 for an RSA private key.
 const Pkcs1PrivateKey = struct {
-    version: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    version: u8,
     n: asn1.Opaque(asn1.Tag.universal(.integer, false)),
     e: asn1.Opaque(asn1.Tag.universal(.integer, false)),
     d: asn1.Opaque(asn1.Tag.universal(.integer, false)),
     p: asn1.Opaque(asn1.Tag.universal(.integer, false)),
     q: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    dp: ?asn1.Opaque(asn1.Tag.universal(.integer, false)) = null,
+    dq: ?asn1.Opaque(asn1.Tag.universal(.integer, false)) = null,
+    qinv: ?asn1.Opaque(asn1.Tag.universal(.integer, false)) = null,
+
+    // bytes = encode([]Pkcs1AdditionalRSAPrime)
+    additional_primes: ?asn1.Opaque(asn1.Tag.universal(.sequence, true)) = null,
 };
 
 // Pkcs1PublicKey reflects the ASN.1 structure of a PKCS #1 public key.
 const Pkcs1PublicKey = struct {
     n: asn1.Opaque(asn1.Tag.universal(.integer, false)),
     e: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+};
+
+const AlgorithmIdentifier = struct {
+    algorithm: asn1.Oid,
+    parameters: ?asn1.Any = null,
+};
+
+const PkixPublicKey = struct {
+    algo: AlgorithmIdentifier,
+    bit_string: asn1.BitString,
+};
+
+const Pkcs8PrivateKey = struct {
+    version: u8,
+    algo: AlgorithmIdentifier,
+    private_key: asn1.Opaque(asn1.Tag.universal(.octetstring, false)),
 };
 
 pub const PublicKey = struct {
@@ -123,21 +151,43 @@ pub const PublicKey = struct {
     }
 
     pub fn toDer(self: Self, alloc: Allocator) ![]const u8 {
-        var n_buf: [max_modulus_len]u8 = undefined;
-        try self.n.toBytes(&n_buf, .big);
-        const new_n_buf = utils.stripLeadingZeros(&n_buf);
+        const n_buf = try utils.bytesFromModulus(alloc, self.n);
+        defer alloc.free(n_buf);
 
-        var e_buf: [max_modulus_len]u8 = undefined;
-        try self.e.toBytes(&e_buf, .big);
-        const new_e_buf = utils.stripLeadingZeros(&e_buf);
+        const e_buf = try utils.bytesFromFe(alloc, self.e);
+        defer alloc.free(e_buf);
 
-        const value = Pkcs1PublicKey{
-            .n = .{ .bytes = new_n_buf },
-            .e = .{ .bytes = new_e_buf },
+        const value: Pkcs1PublicKey = .{
+            .n = .{ .bytes = n_buf },
+            .e = .{ .bytes = e_buf },
         };
 
-        const ders = try asn1.der.encode(alloc, value);
-        return ders;
+        const der_bytes = try asn1.der.encode(alloc, value);
+        return der_bytes;
+    }
+
+    pub fn toPKCS8Der(self: Self, alloc: Allocator) ![]const u8 {
+        const algo_id: AlgorithmIdentifier = .{
+            .algorithm = asn1.Oid.fromDotComptime(oid_rsa_publickey),
+            .parameters = asn1.Any{ 
+                .tag = asn1.Tag.universal(.null, false), 
+                .bytes = &.{},
+            },
+        };
+
+        const pubkey = try self.toDer(alloc);
+        defer alloc.free(pubkey);
+
+        const value: PkixPublicKey = .{
+            .algo = algo_id,
+            .bit_string = .{ 
+                // .right_padding = utils.getBitstringPadding(pubkey), 
+                .bytes = pubkey, 
+            },
+        };
+
+        const der_bytes = try asn1.der.encode(alloc, value);
+        return der_bytes;
     }
 
     pub fn check(self: Self) !void {
@@ -343,37 +393,103 @@ pub const SecretKey = struct {
     }
 
     pub fn toDer(self: Self, alloc: Allocator) ![]const u8 {
-        var n_buf: [max_modulus_len]u8 = undefined;
-        try self.public_key.n.toBytes(&n_buf, .big);
-        const new_n_buf = utils.stripLeadingZeros(&n_buf);
+        const n_buf = try utils.bytesFromModulus(alloc, self.public_key.n);
+        defer alloc.free(n_buf);
 
-        var e_buf: [max_modulus_len]u8 = undefined;
-        try self.public_key.e.toBytes(&e_buf, .big);
-        const new_e_buf = utils.stripLeadingZeros(&e_buf);
+        const e_buf = try utils.bytesFromFe(alloc, self.public_key.e);
+        defer alloc.free(e_buf);
 
-        var d_buf: [max_modulus_len]u8 = undefined;
-        try self.d.toBytes(&d_buf, .big);
-        const new_d_buf = utils.stripLeadingZeros(&d_buf);
+        const d_buf = try utils.bytesFromFe(alloc, self.d);
+        defer alloc.free(d_buf);
 
-        var p_buf: [max_modulus_len]u8 = undefined;
-        try self.puprimes[0].toBytes(&p_buf, .big);
-        const new_p_buf = utils.stripLeadingZeros(&p_buf);
+        const p_buf = try utils.bytesFromFe(alloc, self.primes[0]);
+        defer alloc.free(p_buf);
 
-        var q_buf: [max_modulus_len]u8 = undefined;
-        try self.primes[1].toBytes(&q_buf, .big);
-        const new_q_buf = utils.stripLeadingZeros(&q_buf);
+        const q_buf = try utils.bytesFromFe(alloc, self.primes[1]);
+        defer alloc.free(q_buf);
 
-        const value = Pkcs1PrivateKey{
-            .version = .{ .bytes = []u8{0x00} },
-            .n = .{ .bytes = new_n_buf },
-            .e = .{ .bytes = new_e_buf },
-            .d = .{ .bytes = new_d_buf },
-            .p = .{ .bytes = new_p_buf },
-            .q = .{ .bytes = new_q_buf },
+        const dp_buf = try utils.bytesFromFe(alloc, self.precomputed.?.dp);
+        defer alloc.free(dp_buf);
+
+        const dq_buf = try utils.bytesFromFe(alloc, self.precomputed.?.dq);
+        defer alloc.free(dq_buf);
+
+        const qinv_buf = try utils.bytesFromFe(alloc, self.precomputed.?.qinv);
+        defer alloc.free(qinv_buf);
+
+        var value: Pkcs1PrivateKey = .{
+            .version = 0,
+            .n = .{ .bytes = n_buf },
+            .e = .{ .bytes = e_buf },
+            .d = .{ .bytes = d_buf },
+            .p = .{ .bytes = p_buf },
+            .q = .{ .bytes = q_buf },
+            .dp = .{ .bytes = dp_buf },
+            .dq = .{ .bytes = dq_buf },
+            .qinv = .{ .bytes = qinv_buf },
         };
 
-        const ders = try asn1.der.encode(alloc, value);
-        return ders;
+        var buf = try std.ArrayList(u8).initCapacity(alloc, 0);
+        defer buf.deinit(alloc);
+
+        if (self.primes.len > 2) {
+            value.version = 1;
+
+            for (self.primes[2..], 0..) |prime, i| {
+                const prime_buf = try utils.bytesFromFe(alloc, prime);
+                defer alloc.free(prime_buf);
+
+                const crt_item = self.precomputed.?.crt_values[i];
+
+                const exp_buf = try utils.bytesFromFe(alloc, crt_item.exp);
+                defer alloc.free(exp_buf);
+
+                const coeff_buf = try utils.bytesFromFe(alloc, crt_item.coeff);
+                defer alloc.free(coeff_buf);
+
+                const crt_value: Pkcs1AdditionalRSAPrime = .{
+                    .prime = .{ .bytes = prime_buf },
+                    .exp = .{ .bytes = exp_buf },
+                    .coeff = .{ .bytes = coeff_buf },
+                };
+                const crt_value_der = try asn1.der.encode(alloc, crt_value);
+                defer alloc.free(crt_value_der);
+
+                try buf.appendSlice(alloc, crt_value_der);
+            }
+        }
+
+        const crts_bytes = try buf.toOwnedSliceSentinel(alloc, 0);
+        defer alloc.free(crts_bytes);
+
+        if (crts_bytes.len > 0) {
+            value.additional_primes = .{ .bytes = crts_bytes };
+        }
+
+        const der_bytes = try asn1.der.encode(alloc, value);
+        return der_bytes;
+    }
+
+    pub fn toPKCS8Der(self: Self, alloc: Allocator) ![]const u8 {
+        const algo_id: AlgorithmIdentifier = .{
+            .algorithm = asn1.Oid.fromDotComptime(oid_rsa_publickey),
+            .parameters = asn1.Any{ 
+                .tag = asn1.Tag.universal(.null, false), 
+                .bytes = &.{},
+            },
+        };
+
+        const prikey = try self.toDer(alloc);
+        defer alloc.free(prikey);
+
+        const value: Pkcs8PrivateKey = .{
+            .version = 0,
+            .algo = algo_id,
+            .private_key = .{ .bytes = prikey, },
+        };
+
+        const der_bytes = try asn1.der.encode(alloc, value);
+        return der_bytes;
     }
 
     pub fn validate(self: Self) !void {
@@ -448,6 +564,12 @@ pub const SecretKey = struct {
     fn precomputeLegacy(self: *Self, alloc: Allocator) !void {
         if (self.primes.len < 2) {
             return error.RsaInvalidKey;
+        }
+
+        // free data for next
+        if (self.precomputed) |precomputed| {
+            alloc.free(precomputed.crt_values);
+            self.precomputed = null;
         }
 
         var bd = try utils.bigFromFe(alloc, self.d);
@@ -2242,7 +2364,8 @@ pub fn Pss(comptime H: type) type {
             // 6.  Let H = Hash(M'), an octet string of length hLen.
 
             var hasher = HashType.init(.{});
-            hasher.update(&([_]u8{0} ** 8));
+            const zero_slice: [8]u8 = @splat(0);
+            hasher.update(zero_slice[0..]);
             hasher.update(msg_hash);
             hasher.update(salt);
             hasher.final(hashed);
@@ -2373,7 +2496,8 @@ pub fn Pss(comptime H: type) type {
             // 13.  Let H' = Hash(M'), an octet string of length hLen.
             var h_p: [hlen]u8 = undefined;
             var hasher = HashType.init(.{});
-            hasher.update(&([_]u8{0} ** 8));
+            const zero_slice: [8]u8 = @splat(0);
+            hasher.update(zero_slice[0..]);
             hasher.update(m_hash);
             hasher.update(salt);
             hasher.final(&h_p);
@@ -2769,7 +2893,7 @@ fn incCounter(c: *[4]u8) void {
 /// mgf1XOR XORs the bytes in out with a mask generated using the MGF1 function
 /// specified in PKCS #1 v2.1.
 fn mgf1XOR(comptime HashType: type, seed: []const u8, out: []u8) void {
-    var counter: [4]u8 = [_]u8{0} ** 4;
+    var counter: [4]u8 = @splat(0);
     var digest: [HashType.digest_length]u8 = undefined;
 
     var i: usize = 0;
@@ -2852,7 +2976,7 @@ const ct_protected = struct {
 
 test "mgf1XOR" {
     const Hash = std.crypto.hash.sha2.Sha256;
-    var out = [_]u8{0} ** (Hash.digest_length * 2 + 1);
+    var out: [(Hash.digest_length * 2 + 1)]u8 = @splat(0);
 
     mgf1XOR(Hash, "asdf", out[0 .. Hash.digest_length - 1]);
     try std.testing.expectEqualSlices(
@@ -2864,7 +2988,7 @@ test "mgf1XOR" {
         out[0 .. Hash.digest_length - 1],
     );
 
-    var out2 = [_]u8{0} ** (Hash.digest_length * 2 + 1);
+    var out2: [(Hash.digest_length * 2 + 1)]u8 = @splat(0);
 
     mgf1XOR(Hash, "asdf", &out2);
     try std.testing.expectEqualSlices(

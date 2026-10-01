@@ -1,9 +1,9 @@
 .{
     .name = .zig_rsa,
     .description = "An RSA library for zig.",
-    .version = "0.1.12",
+    .version = "0.1.13",
     .fingerprint = 0x2b217de51c7e1426,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0-dev.2338+b46a7f3a2",
     .dependencies = .{},
     .paths = .{
         "build.zig",
