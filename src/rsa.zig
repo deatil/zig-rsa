@@ -169,8 +169,8 @@ pub const PublicKey = struct {
     pub fn toPKCS8Der(self: Self, alloc: Allocator) ![]const u8 {
         const algo_id: AlgorithmIdentifier = .{
             .algorithm = asn1.Oid.fromDotComptime(oid_rsa_publickey),
-            .parameters = asn1.Any{ 
-                .tag = asn1.Tag.universal(.null, false), 
+            .parameters = asn1.Any{
+                .tag = asn1.Tag.universal(.null, false),
                 .bytes = &.{},
             },
         };
@@ -180,9 +180,8 @@ pub const PublicKey = struct {
 
         const value: PkixPublicKey = .{
             .algo = algo_id,
-            .bit_string = .{ 
-                .right_padding = utils.getBitstringPadding(pubkey), 
-                .bytes = pubkey, 
+            .bit_string = .{
+                .bytes = pubkey,
             },
         };
 
@@ -473,8 +472,8 @@ pub const SecretKey = struct {
     pub fn toPKCS8Der(self: Self, alloc: Allocator) ![]const u8 {
         const algo_id: AlgorithmIdentifier = .{
             .algorithm = asn1.Oid.fromDotComptime(oid_rsa_publickey),
-            .parameters = asn1.Any{ 
-                .tag = asn1.Tag.universal(.null, false), 
+            .parameters = asn1.Any{
+                .tag = asn1.Tag.universal(.null, false),
                 .bytes = &.{},
             },
         };
@@ -485,7 +484,9 @@ pub const SecretKey = struct {
         const value: Pkcs8PrivateKey = .{
             .version = 0,
             .algo = algo_id,
-            .private_key = .{ .bytes = prikey, },
+            .private_key = .{
+                .bytes = prikey,
+            },
         };
 
         const der_bytes = try asn1.der.encode(alloc, value);
@@ -509,10 +510,10 @@ pub const SecretKey = struct {
 
         var bd = try utils.bigFromFe(alloc, self.d);
         defer bd.deinit();
-        
+
         var bp = try utils.bigFromFe(alloc, self.primes[0]);
         defer bp.deinit();
-        
+
         var bq = try utils.bigFromFe(alloc, self.primes[1]);
         defer bq.deinit();
 
@@ -780,7 +781,7 @@ pub const KeyPair = struct {
 
             var lambda = try utils.newBig(alloc);
             defer lambda.deinit();
-            
+
             var rem = try utils.newBig(alloc);
             defer rem.deinit();
 
@@ -899,7 +900,7 @@ pub const KeyPair = struct {
 
             var n = try utils.bigFromInt(alloc, 1);
             defer n.deinit();
-            
+
             var totient = try utils.bigFromInt(alloc, 1);
             defer totient.deinit();
 
@@ -908,7 +909,7 @@ pub const KeyPair = struct {
 
                 var pminus1 = try utils.newBig(alloc);
                 defer pminus1.deinit();
-                
+
                 try pminus1.addScalar(&prime, -1);
 
                 try totient.mul(&totient, &pminus1);
@@ -984,7 +985,7 @@ pub const KeyPair = struct {
 
         var big4 = try utils.bigFromInt(alloc, 4);
         defer big4.deinit();
-        
+
         var big3 = try utils.bigFromInt(alloc, 3);
         defer big3.deinit();
 
@@ -1016,10 +1017,10 @@ pub const KeyPair = struct {
 
             var bp = try utils.bigFromBytes(alloc, pb);
             defer bp.deinit();
-            
+
             var bq = try utils.bigFromBytes(alloc, qb);
             defer bq.deinit();
-            
+
             var be = try utils.bigFromBytes(alloc, eb);
             defer be.deinit();
 
@@ -1079,12 +1080,12 @@ pub const KeyPair = struct {
             defer rem.deinit();
 
             // exact: g | (p-1)(q-1)
-            try lambda.divFloor(&rem, &phi, &g); 
+            try lambda.divFloor(&rem, &phi, &g);
 
             // d = e⁻¹ mod λ(n); also proves gcd(e, λ(n)) = 1.
             var bd = try utils.bigModInverse(alloc, &be, &lambda);
             defer bd.deinit();
-            
+
             if (bd.eqlZero()) {
                 continue;
             }
@@ -1255,7 +1256,7 @@ pub const Crypt = struct {
         if (padding == .x931_padding) {
             var nn = try utils.bigFromModulus(alloc, n);
             defer nn.deinit();
-            
+
             var cc = try utils.bigFromFe(alloc, c);
             defer cc.deinit();
 
@@ -1286,13 +1287,13 @@ pub const Crypt = struct {
 
         var bigint15 = try utils.bigFromInt(alloc, 0xf);
         defer bigint15.deinit();
-        
+
         var mm = try utils.bigFromFe(alloc, m);
         defer mm.deinit();
 
         var mLast4bit = try utils.newBig(alloc);
         defer mLast4bit.deinit();
-        
+
         try mLast4bit.bitAnd(&mm, &bigint15);
 
         // it is true if (m & 0xf) != 12
@@ -1303,7 +1304,7 @@ pub const Crypt = struct {
 
             var f = try utils.newBig(alloc);
             defer f.deinit();
-            
+
             try f.sub(&nn, &mm);
 
             m = try utils.feFromBig(n, &f);

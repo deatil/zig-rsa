@@ -122,11 +122,6 @@ pub fn formatBigintBytes(alloc: Allocator, bytes: []const u8) ![]const u8 {
     return alloc.dupe(u8, buf[1..]);
 }
 
-pub fn getBitstringPadding(b: []const u8) u3 {
-    const pad_len = @mod(8 - @mod(8 * b.len, 8), 8);
-    return @intCast(pad_len);
-}
-
 pub fn bytesFromModulus(alloc: Allocator, mod: Modulus) ![]const u8 {
     var buf: [max_modulus_len]u8 = undefined;
     try mod.toBytes(&buf, .big);
