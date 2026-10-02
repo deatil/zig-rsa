@@ -35,31 +35,31 @@ pub const X931Sha384 = X931(sha2.Sha384);
 pub const X931Sha512 = X931(sha2.Sha512);
 
 const Pkcs1AdditionalRSAPrime = struct {
-    prime: asn1.Opaque(asn1.Tag.universal(.integer, false)),
-    exp: asn1.Opaque(asn1.Tag.universal(.integer, false)),
-    coeff: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    prime: asn1.Opaque(.universal(.integer, false)),
+    exp: asn1.Opaque(.universal(.integer, false)),
+    coeff: asn1.Opaque(.universal(.integer, false)),
 };
 
 // Pkcs1PrivateKey is a structure which mirrors the PKCS #1 ASN.1 for an RSA private key.
 const Pkcs1PrivateKey = struct {
     version: u8,
-    n: asn1.Opaque(asn1.Tag.universal(.integer, false)),
-    e: asn1.Opaque(asn1.Tag.universal(.integer, false)),
-    d: asn1.Opaque(asn1.Tag.universal(.integer, false)),
-    p: asn1.Opaque(asn1.Tag.universal(.integer, false)),
-    q: asn1.Opaque(asn1.Tag.universal(.integer, false)),
-    dp: ?asn1.Opaque(asn1.Tag.universal(.integer, false)) = null,
-    dq: ?asn1.Opaque(asn1.Tag.universal(.integer, false)) = null,
-    qinv: ?asn1.Opaque(asn1.Tag.universal(.integer, false)) = null,
+    n: asn1.Opaque(.universal(.integer, false)),
+    e: asn1.Opaque(.universal(.integer, false)),
+    d: asn1.Opaque(.universal(.integer, false)),
+    p: asn1.Opaque(.universal(.integer, false)),
+    q: asn1.Opaque(.universal(.integer, false)),
+    dp: ?asn1.Opaque(.universal(.integer, false)) = null,
+    dq: ?asn1.Opaque(.universal(.integer, false)) = null,
+    qinv: ?asn1.Opaque(.universal(.integer, false)) = null,
 
     // bytes = encode([]Pkcs1AdditionalRSAPrime)
-    additional_primes: ?asn1.Opaque(asn1.Tag.universal(.sequence, true)) = null,
+    additional_primes: ?asn1.Opaque(.universal(.sequence, true)) = null,
 };
 
 // Pkcs1PublicKey reflects the ASN.1 structure of a PKCS #1 public key.
 const Pkcs1PublicKey = struct {
-    n: asn1.Opaque(asn1.Tag.universal(.integer, false)),
-    e: asn1.Opaque(asn1.Tag.universal(.integer, false)),
+    n: asn1.Opaque(.universal(.integer, false)),
+    e: asn1.Opaque(.universal(.integer, false)),
 };
 
 const AlgorithmIdentifier = struct {
@@ -75,7 +75,7 @@ const PkixPublicKey = struct {
 const Pkcs8PrivateKey = struct {
     version: u8,
     algo: AlgorithmIdentifier,
-    private_key: asn1.Opaque(asn1.Tag.universal(.octetstring, false)),
+    private_key: asn1.Opaque(.universal(.octetstring, false)),
 };
 
 pub const PublicKey = struct {
@@ -168,9 +168,9 @@ pub const PublicKey = struct {
 
     pub fn toPKCS8Der(self: Self, alloc: Allocator) ![]const u8 {
         const algo_id: AlgorithmIdentifier = .{
-            .algorithm = asn1.Oid.fromDotComptime(oid_rsa_publickey),
-            .parameters = asn1.Any{
-                .tag = asn1.Tag.universal(.null, false),
+            .algorithm = .fromDotComptime(oid_rsa_publickey),
+            .parameters = .{
+                .tag = .universal(.null, false),
                 .bytes = &.{},
             },
         };
@@ -471,9 +471,9 @@ pub const SecretKey = struct {
 
     pub fn toPKCS8Der(self: Self, alloc: Allocator) ![]const u8 {
         const algo_id: AlgorithmIdentifier = .{
-            .algorithm = asn1.Oid.fromDotComptime(oid_rsa_publickey),
-            .parameters = asn1.Any{
-                .tag = asn1.Tag.universal(.null, false),
+            .algorithm = .fromDotComptime(oid_rsa_publickey),
+            .parameters = .{
+                .tag = .universal(.null, false),
                 .bytes = &.{},
             },
         };
