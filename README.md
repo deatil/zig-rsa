@@ -5,7 +5,7 @@ An RSA library for zig.
 
 ### Env
 
- - Zig >= 0.17.0-dev-20260929
+ - Zig >= 0.17.0
 
 
 ### Adding zig-rsa as a dependency
