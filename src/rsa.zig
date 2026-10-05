@@ -2975,6 +2975,50 @@ const ct_protected = struct {
     }
 };
 
+test "incCounter" {
+    {
+		var counter = [4]u8{0, 0, 0, 5};
+		incCounter(&counter);
+
+        try std.testing.expectFmt("00000006", "{x}", .{&counter});
+    }
+
+    {
+		var counter = [4]u8{0, 0, 0, 0xFF};
+		incCounter(&counter);
+
+        try std.testing.expectFmt("00000100", "{x}", .{&counter});
+    }
+
+    {
+		var counter = [4]u8{0, 0, 0xFF, 0xFF};
+		incCounter(&counter);
+
+        try std.testing.expectFmt("00010000", "{x}", .{&counter});
+    }
+
+    {
+		var counter = [4]u8{0, 0xFF, 0xFF, 0xFF};
+		incCounter(&counter);
+
+        try std.testing.expectFmt("01000000", "{x}", .{&counter});
+    }
+
+    {
+		var counter = [4]u8{0xFF, 0xFF, 0xFF, 0xFF};
+		incCounter(&counter);
+
+        try std.testing.expectFmt("00000000", "{x}", .{&counter});
+    }
+
+    {
+		var counter = [4]u8{0xFE, 0xFF, 0xFF, 0xFF};
+		incCounter(&counter);
+
+        try std.testing.expectFmt("ff000000", "{x}", .{&counter});
+    }
+}
+
 test "mgf1XOR" {
     const Hash = std.crypto.hash.sha2.Sha256;
     var out: [(Hash.digest_length * 2 + 1)]u8 = @splat(0);
@@ -3016,6 +3060,6 @@ test "ct" {
 }
 
 test {
-    _ = @import("subtle.zig");
+    _ = subtle;
     _ = @import("rsa_test.zig");
 }
