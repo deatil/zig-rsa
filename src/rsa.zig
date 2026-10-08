@@ -633,20 +633,10 @@ pub const SecretKey = struct {
             var coeff = try utils.bigModInverse(alloc, &r, &prime);
             defer coeff.deinit();
 
-            var r2 = try r.clone();
-            if (!r2.isOdd()) {
-                try r2.addScalar(&r2, 51);
-            } else {
-                try r2.addScalar(&r2, 50);
-            }
-            defer r2.deinit();
-
-            const rr = try utils.modulusFromBig(&r2);
-
             try crts.append(alloc, .{
                 .exp = try utils.feFromBig(self.public_key.n, &exp),
                 .coeff = try utils.feFromBig(self.public_key.n, &coeff),
-                .r = try utils.feFromBig(rr, &r),
+                .r = try utils.modulusFromBig(&r),
             });
 
             try r.mul(&r, &prime);
@@ -679,7 +669,7 @@ pub const PrecomputedValues = struct {
 pub const CRTValue = struct {
     exp: Fe, // D mod (prime-1).
     coeff: Fe, // R·Coeff ≡ 1 mod Prime.
-    r: Fe, // product of primes prior to this (inc p and q).
+    r: Modulus, // product of primes prior to this (inc p and q).
 };
 
 pub const KeyPair = struct {
