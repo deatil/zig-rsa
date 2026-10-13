@@ -1603,6 +1603,67 @@ pub const Crypt = struct {
             const out = try alloc.dupe(u8, em[em.len - j - 1 .. em.len - 1]);
             return out;
         }
+
+        pub fn sslv23Pad(alloc: Allocator, random: Random, em_len: usize, msg: []const u8) ![]const u8 {
+            if (msg.len > em_len - 11) {
+                return error.RsaMessageTooLong;
+            }
+
+            // em = 0x00 || 0x02 || PS (non-zero random) || 0x00 || msg
+            var em = try alloc.alloc(u8, em_len);
+
+            em[0] = 0;
+            em[1] = 2;
+
+            const ps_len = em_len - 3 - 8 - msg.len;
+            if (ps_len < 0) {
+                return error.RsaInvalidPaddingLength;
+            }
+            
+            const ps = em[2..][0 .. ps_len];
+
+            // PS consists of pseudo-randomly generated nonzero octets.
+            for (ps) |*v| {
+                v.* = random.uintLessThan(u8, 0xff) + 1;
+            }
+
+            @memset(em[ps_len+2..][0..8], 0x03);
+
+            em[em.len - msg.len - 1] = 0;
+            @memcpy(em[em.len - msg.len ..][0..msg.len], msg);
+
+            return em;
+        }
+
+        pub fn sslv23Unpad(alloc: Allocator, k: usize, em: []const u8) ![]const u8 {
+            if (k < 11) {
+                return error.RsaErrDecryption;
+            }
+
+            if (em.len < 11) {
+                return error.RsaEmTooSmall;
+            }
+
+            if (ct.@"or"(em[0] != 0, em[1] != 2)) {
+                return error.RsaErrDecryption;
+            }
+
+            const msg_start = ct.lastIndexOfScalar(em, 0) orelse em.len;
+            const ps_len = msg_start - 2;
+            if (ps_len < 8) {
+                return error.RsaInconsistent;
+            }
+
+            var j = msg_start - 8;
+            while (j < msg_start): (j += 1) {
+                if (em[j] != 0x03) {
+                    return error.RsaInconsistent;
+                }
+            }
+
+            const out = try alloc.dupe(u8, em[msg_start + 1 ..]);
+            return out;
+        }
     };
 
     pub const Encrypter = struct {
@@ -1620,6 +1681,7 @@ pub const Crypt = struct {
             pkcs1_padding,
             oaep_padding,
             x931_padding,
+            sslv23_padding,
             no_padding,
         };
 
@@ -1643,6 +1705,7 @@ pub const Crypt = struct {
 
             const em = switch (self.padding) {
                 .pkcs1_padding => try Padding.pkcs1Type2Pad(self.alloc, self.random, k, msg),
+                .sslv23_padding => try Padding.sslv23Pad(self.alloc, self.random, k, msg),
                 .no_padding => try Padding.noPad(self.alloc, k, msg),
                 else => {
                     return error.RsaPaddingNotSupport;
@@ -1662,6 +1725,7 @@ pub const Crypt = struct {
 
             const out = switch (self.padding) {
                 .pkcs1_padding => try Padding.pkcs1Type2Unpad(self.alloc, k, em),
+                .sslv23_padding => try Padding.sslv23Unpad(self.alloc, k, em),
                 .no_padding => try Padding.noUnpad(self.alloc, k, em),
                 else => {
                     return error.RsaPaddingNotSupport;

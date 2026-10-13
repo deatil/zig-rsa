@@ -1990,6 +1990,34 @@ test "Encrypter encrypt" {
 
         try testing.expectFmt(msg2, "{s}", .{dec2});
     }
+
+    {
+        var encrypter = rsa.Crypt.Encrypter.init(alloc);
+        encrypter.withRandom(random);
+        encrypter.withPadding(.sslv23_padding);
+
+        const enc = try encrypter.encrypt(pub_key, msg);
+        const dec = try encrypter.decrypt(pri_key, enc);
+
+        defer alloc.free(enc);
+        defer alloc.free(dec);
+
+        try testing.expectFmt(msg, "{s}", .{dec});
+        // try testing.expectFmt("222", "{x}", .{enc});
+
+        // ==========
+
+        const check2 = "0838de3d8bcf75e5036b543cc67a91a978715d2521f268226f3a0cb2ae875b293333ec17788437a88095debf5b3fb1e16ab0d06380fa46729b9b3ad2440d0454";
+        var enc2: [256]u8 = undefined;
+        const enc2_res = try fmt.hexToBytes(&enc2, check2);
+
+        const dec2 = try encrypter.decrypt(pri_key, enc2_res);
+        defer alloc.free(dec2);
+
+        const msg2 = "12345678abcde";
+
+        try testing.expectFmt(msg2, "{s}", .{dec2});
+    }
 }
 
 test "decryptPublicKey check" {
