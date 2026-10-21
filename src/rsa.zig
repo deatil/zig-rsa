@@ -1416,7 +1416,7 @@ pub const Crypt = struct {
             // Care shall be taken to ensure that an opponent cannot
             // distinguish these error conditions, whether by error
             // message or timing.
-            const msg_start = ct.lastIndexOfScalar(em, 0) orelse em.len;
+            const msg_start = ct.findScalarLast(em, 0) orelse em.len;
             const ps_len = em.len - msg_start;
             if (ct.@"or"(em[0] != 0, ct.@"or"(em[1] != 2, ps_len < 8))) {
                 return error.RsaInconsistent;
@@ -1490,7 +1490,7 @@ pub const Crypt = struct {
             // Care shall be taken to ensure that an opponent cannot
             // distinguish these error conditions, whether by error
             // message or timing.
-            const msg_start = ct.indexOfScalarPos(em, expected_hash.len + 1, 1) orelse 0;
+            const msg_start = ct.findScalarPos(em, expected_hash.len + 1, 1) orelse 0;
             if (ct.@"or"(y != 0, ct.@"or"(msg_start == 0, !ct.memEql(expected_hash, actual_hash)))) {
                 return error.RsaInconsistent;
             }
@@ -1648,7 +1648,7 @@ pub const Crypt = struct {
                 return error.RsaErrDecryption;
             }
 
-            const msg_start = ct.lastIndexOfScalar(em, 0) orelse em.len;
+            const msg_start = ct.findScalarLast(em, 0) orelse em.len;
             const ps_len = msg_start - 2;
             if (ps_len < 8) {
                 return error.RsaInconsistent;
@@ -2519,7 +2519,7 @@ pub fn Pss(comptime H: type) type {
             db[0] &= bitMask;
 
             if (s_len == pss_salt_length_auto) {
-                if (std.mem.indexOfScalar(u8, db, 0x01)) |ps_len| {
+                if (std.mem.findScalar(u8, db, 0x01)) |ps_len| {
                     s_len = db.len - ps_len - 1;
                 } else {
                     return error.RsaErrorVerification;
@@ -2972,12 +2972,12 @@ fn mgf1XOR(comptime HashType: type, seed: []const u8, out: []u8) void {
 const ct = if (std.options.side_channels_mitigations == .none) ct_unprotected else ct_protected;
 
 const ct_unprotected = struct {
-    fn lastIndexOfScalar(slice: []const u8, value: u8) ?usize {
-        return std.mem.lastIndexOfScalar(u8, slice, value);
+    fn findScalarLast(slice: []const u8, value: u8) ?usize {
+        return std.mem.findScalarLast(u8, slice, value);
     }
 
-    fn indexOfScalarPos(slice: []const u8, start_index: usize, value: u8) ?usize {
-        return std.mem.indexOfScalarPos(u8, slice, start_index, value);
+    fn findScalarPos(slice: []const u8, start_index: usize, value: u8) ?usize {
+        return std.mem.findScalarPos(u8, slice, start_index, value);
     }
 
     fn memEql(a: []const u8, b: []const u8) bool {
@@ -2994,7 +2994,7 @@ const ct_unprotected = struct {
 };
 
 const ct_protected = struct {
-    fn lastIndexOfScalar(slice: []const u8, value: u8) ?usize {
+    fn findScalarLast(slice: []const u8, value: u8) ?usize {
         var res: ?usize = null;
         var i: usize = slice.len;
         while (i != 0) {
@@ -3004,7 +3004,7 @@ const ct_protected = struct {
         return res;
     }
 
-    fn indexOfScalarPos(slice: []const u8, start_index: usize, value: u8) ?usize {
+    fn findScalarPos(slice: []const u8, start_index: usize, value: u8) ?usize {
         var res: ?usize = null;
         for (slice[start_index..], start_index..) |c, j| {
             if (c == value) res = j;
@@ -3109,8 +3109,8 @@ test "ct" {
     try std.testing.expectEqual(true, c.@"and"(true, true));
     try std.testing.expectEqual(true, c.memEql("Asdf", "Asdf"));
     try std.testing.expectEqual(false, c.memEql("asdf", "Asdf"));
-    try std.testing.expectEqual(3, c.indexOfScalarPos("asdff", 1, 'f'));
-    try std.testing.expectEqual(4, c.lastIndexOfScalar("asdff", 'f'));
+    try std.testing.expectEqual(3, c.findScalarPos("asdff", 1, 'f'));
+    try std.testing.expectEqual(4, c.findScalarLast("asdff", 'f'));
 }
 
 test {
